@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'pdf_utils.dart';
 
 const _red = Color(0xFFE30613);
@@ -10,7 +11,12 @@ const _card = Color(0xFF1E1E22);
 
 const _bekannteWachen = ['Bad Salzungen', 'Vacha', 'Gumpelstadt', 'Dermbach', 'Geisa'];
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(
+    url: 'https://nznyfbojyhbolnwnodzz.supabase.co',
+    publishableKey: 'sb_publishable_n5Jp12qCZDNETlr7Z16-RA_uKzehPtd',
+  );
   runApp(const LagerorteApp());
 }
 
@@ -45,7 +51,10 @@ class _RootScreenState extends State<RootScreen> {
   String? _aktivesLager;
   final _searchCtrl = TextEditingController();
   bool _isParsingLager = false;
+  bool _isSyncingLager = false;
   String? _lagerFehler;
+
+  SupabaseClient get _db => Supabase.instance.client;
 
   // --- Kommissionieren ---
   String? _bestellNr;
@@ -63,6 +72,7 @@ class _RootScreenState extends State<RootScreen> {
 
   Future<void> _laden() async {
     final prefs = await SharedPreferences.getInstance();
+    // Lokaler Cache zuerst, damit sofort etwas sichtbar ist (auch offline).
     final rawLager = prefs.getString('lager_daten');
     if (rawLager != null) {
       final decoded = jsonDecode(rawLager) as Map<String, dynamic>;
@@ -73,6 +83,9 @@ class _RootScreenState extends State<RootScreen> {
             .toList();
       });
     }
+    setState(() => _aktivesLager = _lager.keys.isNotEmpty ? _lager.keys.first : null);
+    await _lagerVonDbLaden();
+
     final rawBestellung = prefs.getString('aktuelle_bestellung');
     if (rawBestellung != null) {
       final decoded = jsonDecode(rawBestellung) as Map<String, dynamic>;
@@ -81,8 +94,38 @@ class _RootScreenState extends State<RootScreen> {
       _positionen = (decoded['positionen'] as List)
           .map((e) => BestellPosition.fromJson(e as Map<String, dynamic>))
           .toList();
+      setState(() {});
     }
-    setState(() => _aktivesLager = _lager.keys.isNotEmpty ? _lager.keys.first : null);
+  }
+
+  /// Lädt die Lagerlisten aller Lager aus der geteilten Datenbank (falls
+  /// erreichbar) und ersetzt damit den lokalen Stand, damit alle Geräte
+  /// denselben Datensatz sehen.
+  Future<void> _lagerVonDbLaden() async {
+    setState(() => _isSyncingLager = true);
+    try {
+      final rows = await _db.from('lagerorte').select('lager, name, lagerort');
+      final Map<String, List<ArtikelOrt>> geladen = {};
+      for (final row in rows as List) {
+        final lager = row['lager'] as String;
+        geladen.putIfAbsent(lager, () => []).add(ArtikelOrt(row['name'] as String, row['lagerort'] as String));
+      }
+      if (geladen.isNotEmpty || _lager.isEmpty) {
+        setState(() {
+          _lager
+            ..clear()
+            ..addAll(geladen);
+          if (_aktivesLager == null || !_lager.containsKey(_aktivesLager)) {
+            _aktivesLager = _lager.keys.isNotEmpty ? _lager.keys.first : null;
+          }
+        });
+        await _lagerSpeichern();
+      }
+    } catch (_) {
+      // offline oder DB nicht erreichbar -> lokaler Cache bleibt bestehen
+    } finally {
+      if (mounted) setState(() => _isSyncingLager = false);
+    }
   }
 
   Future<void> _lagerSpeichern() async {
@@ -133,9 +176,24 @@ class _RootScreenState extends State<RootScreen> {
         _aktivesLager = lagerName;
       });
       await _lagerSpeichern();
+
+      String? dbFehler;
+      try {
+        await _db.from('lagerorte').delete().eq('lager', lagerName);
+        await _db.from('lagerorte').insert(
+            items.map((a) => {'lager': lagerName, 'name': a.name, 'lagerort': a.lagerort}).toList());
+      } catch (e) {
+        dbFehler = '$e';
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$lagerName: ${items.length} Artikel importiert'), backgroundColor: Colors.green),
+          SnackBar(
+            content: Text(dbFehler == null
+                ? '$lagerName: ${items.length} Artikel importiert und in der Datenbank gespeichert'
+                : '$lagerName: ${items.length} Artikel lokal gespeichert, Datenbank aber nicht erreichbar ($dbFehler)'),
+            backgroundColor: dbFehler == null ? Colors.green : Colors.orange,
+          ),
         );
       }
     } catch (e) {
@@ -153,6 +211,9 @@ class _RootScreenState extends State<RootScreen> {
       }
     });
     await _lagerSpeichern();
+    try {
+      await _db.from('lagerorte').delete().eq('lager', lager);
+    } catch (_) {}
   }
 
   List<ArtikelOrt> get _gefiltert {
@@ -403,6 +464,14 @@ class _RootScreenState extends State<RootScreen> {
         automaticallyImplyLeading: false,
         title: const Text('LAGERLISTE', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
         actions: [
+          IconButton(
+            icon: _isSyncingLager
+                ? const SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _red))
+                : const Icon(Icons.sync),
+            tooltip: 'Von der Datenbank aktualisieren',
+            onPressed: _isSyncingLager ? null : _lagerVonDbLaden,
+          ),
           IconButton(
             icon: _isParsingLager
                 ? const SizedBox(width: 20, height: 20,
