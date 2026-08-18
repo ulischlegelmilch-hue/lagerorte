@@ -272,11 +272,12 @@ class _RootScreenState extends State<RootScreen> {
     await _bestellungSpeichern();
   }
 
-  /// Lagerort je Position aus der zur Wache passenden Lagerliste auflösen.
+  /// Lagerort je Position im Hauptlager auflösen. Die Bestellung kommt von
+  /// einem Außenlager (Wache), kommissioniert wird aber immer im einen
+  /// zentralen Hauptlager – die Lagerorte sind unabhängig davon, welche
+  /// Wache bestellt hat.
   String? _lagerortFuer(BestellPosition pos) {
-    final wache = _bestellWache;
-    if (wache == null) return null;
-    final liste = _lager[wache];
+    final liste = _lager[_aktivesLager];
     if (liste == null) return null;
     final gesucht = pos.name.trim().toLowerCase();
     for (final a in liste) {
@@ -387,7 +388,7 @@ class _RootScreenState extends State<RootScreen> {
               style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
         ]),
       ),
-      if (_lager[_bestellWache] == null)
+      if (_lager[_aktivesLager] == null)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: Row(children: [
@@ -395,7 +396,7 @@ class _RootScreenState extends State<RootScreen> {
             const SizedBox(width: 6),
             Expanded(
               child: Text(
-                'Für "${_bestellWache ?? '?'}" ist noch keine Lagerliste importiert – Lagerorte können nicht zugeordnet werden.',
+                'Es ist noch keine Lagerliste des Hauptlagers importiert – Lagerorte können nicht zugeordnet werden.',
                 style: const TextStyle(color: Colors.orange, fontSize: 12),
               ),
             ),
