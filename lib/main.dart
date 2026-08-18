@@ -2,11 +2,13 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'pdf_utils.dart';
 
 const _red = Color(0xFFE30613);
 const _bg = Color(0xFF121212);
 const _card = Color(0xFF1E1E22);
+
+const _bekannteWachen = ['Bad Salzungen', 'Vacha', 'Gumpelstadt', 'Dermbach', 'Geisa'];
 
 void main() {
   runApp(const LagerorteApp());
@@ -18,38 +20,39 @@ class LagerorteApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Lagerorte',
+      title: 'Kommissionieren',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: _bg,
         colorScheme: const ColorScheme.dark(primary: _red, surface: _card),
       ),
-      home: const LagerorteScreen(),
+      home: const RootScreen(),
     );
   }
 }
 
-class ArtikelOrt {
-  final String name;
-  final String lagerort;
-  ArtikelOrt(this.name, this.lagerort);
-  Map<String, String> toJson() => {'n': name, 'l': lagerort};
-  factory ArtikelOrt.fromJson(Map<String, dynamic> m) =>
-      ArtikelOrt(m['n'] as String, m['l'] as String);
-}
-
-class LagerorteScreen extends StatefulWidget {
-  const LagerorteScreen({super.key});
+class RootScreen extends StatefulWidget {
+  const RootScreen({super.key});
   @override
-  State<LagerorteScreen> createState() => _LagerorteScreenState();
+  State<RootScreen> createState() => _RootScreenState();
 }
 
-class _LagerorteScreenState extends State<LagerorteScreen> {
+class _RootScreenState extends State<RootScreen> {
+  int _tab = 0;
+
+  // --- Lagerliste ---
   final Map<String, List<ArtikelOrt>> _lager = {};
   String? _aktivesLager;
   final _searchCtrl = TextEditingController();
-  bool _isParsing = false;
-  String? _fehler;
+  bool _isParsingLager = false;
+  String? _lagerFehler;
+
+  // --- Kommissionieren ---
+  String? _bestellNr;
+  String? _bestellWache;
+  List<BestellPosition> _positionen = [];
+  bool _isParsingBestellung = false;
+  String? _bestellFehler;
 
   @override
   void initState() {
@@ -60,50 +63,68 @@ class _LagerorteScreenState extends State<LagerorteScreen> {
 
   Future<void> _laden() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('lager_daten');
-    if (raw == null) return;
-    final decoded = jsonDecode(raw) as Map<String, dynamic>;
-    setState(() {
+    final rawLager = prefs.getString('lager_daten');
+    if (rawLager != null) {
+      final decoded = jsonDecode(rawLager) as Map<String, dynamic>;
       _lager.clear();
       decoded.forEach((lager, liste) {
         _lager[lager] = (liste as List)
             .map((e) => ArtikelOrt.fromJson(e as Map<String, dynamic>))
             .toList();
       });
-      _aktivesLager = _lager.keys.isNotEmpty ? _lager.keys.first : null;
-    });
+    }
+    final rawBestellung = prefs.getString('aktuelle_bestellung');
+    if (rawBestellung != null) {
+      final decoded = jsonDecode(rawBestellung) as Map<String, dynamic>;
+      _bestellNr = decoded['nr'] as String?;
+      _bestellWache = decoded['wache'] as String?;
+      _positionen = (decoded['positionen'] as List)
+          .map((e) => BestellPosition.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    setState(() => _aktivesLager = _lager.keys.isNotEmpty ? _lager.keys.first : null);
   }
 
-  Future<void> _speichern() async {
+  Future<void> _lagerSpeichern() async {
     final prefs = await SharedPreferences.getInstance();
     final encoded = jsonEncode(_lager.map(
         (lager, liste) => MapEntry(lager, liste.map((e) => e.toJson()).toList())));
     await prefs.setString('lager_daten', encoded);
   }
 
-  Future<void> _pdfImportieren() async {
-    setState(() => _fehler = null);
+  Future<void> _bestellungSpeichern() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_positionen.isEmpty) {
+      await prefs.remove('aktuelle_bestellung');
+      return;
+    }
+    final encoded = jsonEncode({
+      'nr': _bestellNr,
+      'wache': _bestellWache,
+      'positionen': _positionen.map((e) => e.toJson()).toList(),
+    });
+    await prefs.setString('aktuelle_bestellung', encoded);
+  }
+
+  // ---------------- Lagerliste-Import ----------------
+
+  Future<void> _lagerPdfImportieren() async {
+    setState(() => _lagerFehler = null);
     final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
     if (result.isEmpty) return;
     final picked = result.first;
 
-    setState(() => _isParsing = true);
+    setState(() => _isParsingLager = true);
     try {
       final bytes = await picked.readAsBytes();
-      final document = PdfDocument(inputBytes: bytes);
-      final buffer = StringBuffer();
-      for (var i = 0; i < document.pages.count; i++) {
-        buffer.writeln(PdfTextExtractor(document).extractText(startPageIndex: i));
-      }
-      document.dispose();
-      final text = buffer.toString();
+      final text = extractPdfText(bytes);
 
       final lagerMatch = RegExp(r'Inventurliste\s+Lager\s+(.+)').firstMatch(text);
       final lagerName = lagerMatch?.group(1)?.trim() ?? picked.name.replaceAll('.pdf', '');
 
-      final items = _parseInventurliste(text);
+      final items = parseInventurliste(text);
       if (items.isEmpty) {
-        setState(() => _fehler = 'Es konnten keine Artikel in dieser PDF erkannt werden.');
+        setState(() => _lagerFehler = 'Es konnten keine Artikel in dieser PDF erkannt werden.');
         return;
       }
 
@@ -111,109 +132,27 @@ class _LagerorteScreenState extends State<LagerorteScreen> {
         _lager[lagerName] = items;
         _aktivesLager = lagerName;
       });
-      await _speichern();
+      await _lagerSpeichern();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$lagerName: ${items.length} Artikel importiert'),
-            backgroundColor: Colors.green,
-          ),
+          SnackBar(content: Text('$lagerName: ${items.length} Artikel importiert'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
-      setState(() => _fehler = 'PDF konnte nicht gelesen werden: $e');
+      setState(() => _lagerFehler = 'PDF konnte nicht gelesen werden: $e');
     } finally {
-      if (mounted) setState(() => _isParsing = false);
+      if (mounted) setState(() => _isParsingLager = false);
     }
   }
 
-  /// Baut aus dem "Inventurliste"-PDF (Spalten: Artikelnummer, Lagerort,
-  /// Stückpreis, Einheit, Ist-Bestand, Artikelbeschreibung, Preis-Zeile 2)
-  /// eine reine Name->Lagerort-Zuordnung. Der PDF-Textextraktor legt jede
-  /// Tabellenzelle als eigene Zeile ab, getrennt durch Leerzeilen; das
-  /// Einheit-Feld fehlt bei manchen Zeilen ganz.
-  List<ArtikelOrt> _parseInventurliste(String text) {
-    final lines = text.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
-
-    final nrRe = RegExp(r'^(\d+):$');
-    final priceRe = RegExp(r'^\d+,\d{2}');
-    final intRe = RegExp(r'^\d+');
-
-    final items = <ArtikelOrt>[];
-    int state = 0; // 0=Nr, 1=Lagerort, 2=Preis1, 3=Einheit/Ist-Bestand, 4=Ist-Bestand, 5=Name, 6=Preis2/Name-Fortsetzung
-    String lagerort = '', einheit = '', name = '';
-    bool haveNr = false;
-
-    void flush() {
-      if (haveNr && name.isNotEmpty && lagerort.isNotEmpty) {
-        items.add(ArtikelOrt(_bereinigeName(name, einheit), lagerort));
+  Future<void> _lagerLoeschen(String lager) async {
+    setState(() {
+      _lager.remove(lager);
+      if (_aktivesLager == lager) {
+        _aktivesLager = _lager.keys.isNotEmpty ? _lager.keys.first : null;
       }
-      haveNr = false;
-    }
-
-    for (final l in lines) {
-      switch (state) {
-        case 0:
-          if (nrRe.hasMatch(l)) { haveNr = true; state = 1; }
-          break;
-        case 1:
-          lagerort = l; state = 2;
-          break;
-        case 2:
-          if (priceRe.hasMatch(l)) state = 3;
-          break;
-        case 3:
-          if (intRe.hasMatch(l)) { einheit = ''; state = 5; }
-          else { einheit = l; state = 4; }
-          break;
-        case 4:
-          if (intRe.hasMatch(l)) state = 5;
-          break;
-        case 5:
-          name = l; state = 6;
-          break;
-        case 6:
-          if (priceRe.hasMatch(l)) { flush(); state = 0; lagerort = ''; einheit = ''; name = ''; }
-          else { name = '$name $l'; }
-          break;
-      }
-    }
-    flush();
-    return items;
-  }
-
-  static const _einheitFamilien = <String, List<String>>{
-    'stueck': ['stück', 'stk'],
-    'karton': ['karton', 'kart', 'ktn'],
-    'beutel': ['beutel', 'btl'],
-    'flasche': ['flasche', 'pipette'],
-    'packung': ['pack', 'pck'],
-    'rolle': ['rolle'],
-    'paar': ['paar'],
-    'tube': ['tube'],
-  };
-
-  Set<String> _familien(String text) {
-    final t = text.toLowerCase();
-    final result = <String>{};
-    _einheitFamilien.forEach((familie, schluessel) {
-      if (schluessel.any((s) => t.contains(s))) result.add(familie);
     });
-    return result;
-  }
-
-  /// Entfernt die letzte Klammer im Namen NUR, wenn ihr Inhalt zur Einheit
-  /// dieser Zeile passt (z.B. "(Stück)" bei Einheit "Stück"). Klammern mit
-  /// Artikelmerkmalen (Farbe, Größe, ...) bleiben erhalten.
-  String _bereinigeName(String name, String einheit) {
-    if (einheit.isEmpty) return name;
-    final m = RegExp(r'^(.*)\(([^()]*)\)\s*$').firstMatch(name);
-    if (m == null) return name;
-    final klammerInhalt = m.group(2)!;
-    if (_familien(klammerInhalt).intersection(_familien(einheit)).isNotEmpty) {
-      return m.group(1)!.trim();
-    }
-    return name;
+    await _lagerSpeichern();
   }
 
   List<ArtikelOrt> get _gefiltert {
@@ -226,136 +165,350 @@ class _LagerorteScreenState extends State<LagerorteScreen> {
     return gefiltert;
   }
 
-  Future<void> _lagerLoeschen(String lager) async {
-    setState(() {
-      _lager.remove(lager);
-      if (_aktivesLager == lager) {
-        _aktivesLager = _lager.keys.isNotEmpty ? _lager.keys.first : null;
+  // ---------------- Bestellung-Import / Kommissionieren ----------------
+
+  Future<void> _bestellungPdfImportieren() async {
+    setState(() => _bestellFehler = null);
+    final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
+    if (result.isEmpty) return;
+    final picked = result.first;
+
+    setState(() => _isParsingBestellung = true);
+    try {
+      final bytes = await picked.readAsBytes();
+      final text = extractPdfText(bytes);
+      final bestellung = parseBestellung(text, _bekannteWachen);
+
+      if (bestellung.positionen.isEmpty) {
+        setState(() => _bestellFehler = 'Es konnten keine Positionen in dieser PDF erkannt werden.');
+        return;
       }
+
+      setState(() {
+        _bestellNr = bestellung.bestellNr;
+        _bestellWache = bestellung.wache;
+        _positionen = bestellung.positionen;
+      });
+      await _bestellungSpeichern();
+    } catch (e) {
+      setState(() => _bestellFehler = 'PDF konnte nicht gelesen werden: $e');
+    } finally {
+      if (mounted) setState(() => _isParsingBestellung = false);
+    }
+  }
+
+  Future<void> _bestellungZuruecksetzen() async {
+    setState(() {
+      _bestellNr = null;
+      _bestellWache = null;
+      _positionen = [];
     });
-    await _speichern();
+    await _bestellungSpeichern();
+  }
+
+  Future<void> _toggleAbgehakt(BestellPosition pos) async {
+    setState(() => pos.abgehakt = !pos.abgehakt);
+    await _bestellungSpeichern();
+  }
+
+  /// Lagerort je Position aus der zur Wache passenden Lagerliste auflösen.
+  String? _lagerortFuer(BestellPosition pos) {
+    final wache = _bestellWache;
+    if (wache == null) return null;
+    final liste = _lager[wache];
+    if (liste == null) return null;
+    final gesucht = pos.name.trim().toLowerCase();
+    for (final a in liste) {
+      if (a.name.trim().toLowerCase() == gesucht) return a.lagerort;
+    }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
-    final ergebnisse = _gefiltert;
     return Scaffold(
-      appBar: AppBar(
+      body: SafeArea(
+        child: _tab == 0 ? _buildKommissionierenTab() : _buildLagerlisteTab(),
+      ),
+      bottomNavigationBar: NavigationBar(
         backgroundColor: _card,
-        title: const Text('LAGERORTE', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() => _tab = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.playlist_add_check), label: 'Kommissionieren'),
+          NavigationDestination(icon: Icon(Icons.warehouse_outlined), label: 'Lagerliste'),
+        ],
+      ),
+    );
+  }
+
+  // ---------------- UI: Kommissionieren ----------------
+
+  Widget _buildKommissionierenTab() {
+    return Column(children: [
+      AppBar(
+        backgroundColor: _card,
+        automaticallyImplyLeading: false,
+        title: const Text('KOMMISSIONIEREN', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+        actions: [
+          if (_positionen.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Neue Bestellung importieren',
+              onPressed: _bestellungZuruecksetzen,
+            ),
+          IconButton(
+            icon: _isParsingBestellung
+                ? const SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _red))
+                : const Icon(Icons.picture_as_pdf_outlined),
+            tooltip: 'Bestellung (PDF) importieren',
+            onPressed: _isParsingBestellung ? null : _bestellungPdfImportieren,
+          ),
+        ],
+      ),
+      if (_bestellFehler != null)
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(_bestellFehler!, style: const TextStyle(color: Colors.red)),
+        ),
+      Expanded(
+        child: _positionen.isEmpty
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.playlist_add_check, size: 60, color: Colors.grey),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Noch keine Bestellung importiert.\nOben rechts eine Bestellung (PDF) hochladen.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ]),
+                ),
+              )
+            : _buildKommissionierListe(),
+      ),
+    ]);
+  }
+
+  Widget _buildKommissionierListe() {
+    final erledigt = _positionen.where((p) => p.abgehakt).length;
+    final byLagerort = <String, List<BestellPosition>>{};
+    final sortiert = List<BestellPosition>.from(_positionen)
+      ..sort((a, b) => a.name.compareTo(b.name));
+    for (final pos in sortiert) {
+      final ort = _lagerortFuer(pos) ?? 'Lagerort unbekannt';
+      byLagerort.putIfAbsent(ort, () => []).add(pos);
+    }
+    final keys = byLagerort.keys.toList()
+      ..sort((a, b) {
+        if (a == 'Lagerort unbekannt') return -1;
+        if (b == 'Lagerort unbekannt') return 1;
+        return a.compareTo(b);
+      });
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: Row(children: [
+          Expanded(
+            child: Text(
+              [
+                if (_bestellWache != null) _bestellWache! else 'Wache unbekannt',
+                if (_bestellNr != null) 'Bestellung $_bestellNr',
+              ].join(' · '),
+              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
+            ),
+          ),
+          Text('$erledigt / ${_positionen.length}',
+              style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
+        ]),
+      ),
+      if (_lager[_bestellWache] == null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Row(children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 16),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'Für "${_bestellWache ?? '?'}" ist noch keine Lagerliste importiert – Lagerorte können nicht zugeordnet werden.',
+                style: const TextStyle(color: Colors.orange, fontSize: 12),
+              ),
+            ),
+          ]),
+        ),
+      Expanded(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+          children: keys.map((ort) {
+            final items = byLagerort[ort]!;
+            final unbekannt = ort == 'Lagerort unbekannt';
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: _card,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: (unbekannt ? Colors.orange : _red).withValues(alpha: 0.4)),
+                ),
+                child: Row(children: [
+                  Icon(unbekannt ? Icons.help_outline : Icons.location_on,
+                      color: unbekannt ? Colors.orange : _red, size: 16),
+                  const SizedBox(width: 8),
+                  Text(ort.toUpperCase(),
+                      style: TextStyle(
+                          color: unbekannt ? Colors.orange : Colors.white,
+                          fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+                ]),
+              ),
+              ...items.map((pos) => Container(
+                    margin: const EdgeInsets.symmetric(vertical: 3),
+                    decoration: BoxDecoration(
+                      color: pos.abgehakt ? Colors.green.withValues(alpha: 0.08) : _card,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: pos.abgehakt ? Colors.green.withValues(alpha: 0.4) : Colors.white10),
+                    ),
+                    child: CheckboxListTile(
+                      value: pos.abgehakt,
+                      onChanged: (_) => _toggleAbgehakt(pos),
+                      activeColor: Colors.green,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: Text(pos.name,
+                          style: TextStyle(
+                              color: pos.abgehakt ? Colors.white38 : Colors.white,
+                              decoration: pos.abgehakt ? TextDecoration.lineThrough : null,
+                              fontWeight: FontWeight.w600)),
+                      subtitle: Text('${pos.menge} ${pos.einheit}',
+                          style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                    ),
+                  )),
+            ]);
+          }).toList(),
+        ),
+      ),
+    ]);
+  }
+
+  // ---------------- UI: Lagerliste ----------------
+
+  Widget _buildLagerlisteTab() {
+    final ergebnisse = _gefiltert;
+    return Column(children: [
+      AppBar(
+        backgroundColor: _card,
+        automaticallyImplyLeading: false,
+        title: const Text('LAGERLISTE', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
         actions: [
           IconButton(
-            icon: _isParsing
+            icon: _isParsingLager
                 ? const SizedBox(width: 20, height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2, color: _red))
                 : const Icon(Icons.picture_as_pdf_outlined),
             tooltip: 'Inventurliste (PDF) importieren',
-            onPressed: _isParsing ? null : _pdfImportieren,
+            onPressed: _isParsingLager ? null : _lagerPdfImportieren,
           ),
         ],
       ),
-      body: Column(children: [
-        if (_fehler != null)
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(_fehler!, style: const TextStyle(color: Colors.red)),
-          ),
-        if (_lager.isEmpty)
-          Expanded(
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  const Icon(Icons.location_off_outlined, size: 60, color: Colors.grey),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Noch keine Lagerliste importiert.\nOben rechts eine Inventurliste (PDF) hochladen.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                ]),
-              ),
-            ),
-          )
-        else ...[
-          if (_lager.length > 1)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Row(children: [
-                const Icon(Icons.warehouse_outlined, color: _red, size: 18),
-                const SizedBox(width: 8),
-                DropdownButton<String>(
-                  value: _aktivesLager,
-                  dropdownColor: _card,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  items: _lager.keys
-                      .map((k) => DropdownMenuItem(value: k, child: Text(k)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _aktivesLager = v),
+      if (_lagerFehler != null)
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(_lagerFehler!, style: const TextStyle(color: Colors.red)),
+        ),
+      if (_lager.isEmpty)
+        Expanded(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.location_off_outlined, size: 60, color: Colors.grey),
+                const SizedBox(height: 16),
+                const Text(
+                  'Noch keine Lagerliste importiert.\nOben rechts eine Inventurliste (PDF) hochladen.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey),
                 ),
-                const Spacer(),
-                if (_aktivesLager != null)
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                    tooltip: 'Diese Lagerliste entfernen',
-                    onPressed: () => _lagerLoeschen(_aktivesLager!),
-                  ),
               ]),
             ),
+          ),
+        )
+      else ...[
+        if (_lager.length > 1)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: TextField(
-              controller: _searchCtrl,
-              autofocus: true,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: _card,
-                hintText: 'ARTIKEL SUCHEN',
-                hintStyle: const TextStyle(color: Colors.white54, fontWeight: FontWeight.bold),
-                prefixIcon: const Icon(Icons.search, color: _red),
-                suffixIcon: _searchCtrl.text.isNotEmpty
-                    ? IconButton(icon: const Icon(Icons.clear, color: Colors.white54), onPressed: _searchCtrl.clear)
-                    : null,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(children: [
+              const Icon(Icons.warehouse_outlined, color: _red, size: 18),
+              const SizedBox(width: 8),
+              DropdownButton<String>(
+                value: _aktivesLager,
+                dropdownColor: _card,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                items: _lager.keys.map((k) => DropdownMenuItem(value: k, child: Text(k))).toList(),
+                onChanged: (v) => setState(() => _aktivesLager = v),
               ),
+              const Spacer(),
+              if (_aktivesLager != null)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                  tooltip: 'Diese Lagerliste entfernen',
+                  onPressed: () => _lagerLoeschen(_aktivesLager!),
+                ),
+            ]),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: TextField(
+            controller: _searchCtrl,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: _card,
+              hintText: 'ARTIKEL SUCHEN',
+              hintStyle: const TextStyle(color: Colors.white54, fontWeight: FontWeight.bold),
+              prefixIcon: const Icon(Icons.search, color: _red),
+              suffixIcon: _searchCtrl.text.isNotEmpty
+                  ? IconButton(icon: const Icon(Icons.clear, color: Colors.white54), onPressed: _searchCtrl.clear)
+                  : null,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),
-          Expanded(
-            child: ergebnisse.isEmpty
-                ? const Center(child: Text('Kein Artikel gefunden', style: TextStyle(color: Colors.grey)))
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
-                    itemCount: ergebnisse.length,
-                    itemBuilder: (_, i) {
-                      final item = ergebnisse[i];
-                      return Container(
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        decoration: BoxDecoration(
-                          color: _card,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.white10),
-                        ),
-                        child: ListTile(
-                          title: Text(item.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: _red.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: _red.withValues(alpha: 0.5)),
-                            ),
-                            child: Text(item.lagerort,
-                                style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
+        ),
+        Expanded(
+          child: ergebnisse.isEmpty
+              ? const Center(child: Text('Kein Artikel gefunden', style: TextStyle(color: Colors.grey)))
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+                  itemCount: ergebnisse.length,
+                  itemBuilder: (_, i) {
+                    final item = ergebnisse[i];
+                    return Container(
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _card,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: ListTile(
+                        title: Text(item.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                        trailing: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: _red.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: _red.withValues(alpha: 0.5)),
                           ),
+                          child: Text(item.lagerort, style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
                         ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ]),
-    );
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    ]);
   }
 }
