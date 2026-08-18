@@ -11,6 +11,19 @@ const _card = Color(0xFF1E1E22);
 
 const _bekannteWachen = ['Bad Salzungen', 'Vacha', 'Gumpelstadt', 'Dermbach', 'Geisa'];
 
+/// Ein Artikel an einem Lagerort, aggregiert über alle offenen Bestellungen
+/// hinweg: wie viel insgesamt aus dem Fach zu nehmen ist, aufgeschlüsselt
+/// danach, wie viel davon an welche Wache geht.
+class _AggregatEintrag {
+  final String name;
+  final String lagerort;
+  final List<MapEntry<String, BestellPosition>> proWache;
+  _AggregatEintrag(this.name, this.lagerort, this.proWache);
+  int get gesamt => proWache.fold(0, (s, e) => s + e.value.menge);
+  String get einheit => proWache.first.value.einheit;
+  bool get abgehakt => proWache.every((e) => e.value.abgehakt);
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Supabase.initialize(
@@ -57,11 +70,11 @@ class _RootScreenState extends State<RootScreen> {
   SupabaseClient get _db => Supabase.instance.client;
 
   // --- Kommissionieren ---
-  String? _bestellNr;
-  String? _bestellWache;
-  List<BestellPosition> _positionen = [];
+  final Map<String, Bestellung> _bestellungen = {}; // Key: Wache
   bool _isParsingBestellung = false;
   String? _bestellFehler;
+  int _kommAnsicht = 0; // 0 = Sammelliste, 1 = Je Wache
+  String? _ausgewaehlteWache;
 
   @override
   void initState() {
@@ -86,15 +99,18 @@ class _RootScreenState extends State<RootScreen> {
     setState(() => _aktivesLager = _lager.keys.isNotEmpty ? _lager.keys.first : null);
     await _lagerVonDbLaden();
 
-    final rawBestellung = prefs.getString('aktuelle_bestellung');
-    if (rawBestellung != null) {
-      final decoded = jsonDecode(rawBestellung) as Map<String, dynamic>;
-      _bestellNr = decoded['nr'] as String?;
-      _bestellWache = decoded['wache'] as String?;
-      _positionen = (decoded['positionen'] as List)
-          .map((e) => BestellPosition.fromJson(e as Map<String, dynamic>))
-          .toList();
-      setState(() {});
+    final rawBestellungen = prefs.getString('bestellungen');
+    if (rawBestellungen != null) {
+      final decoded = jsonDecode(rawBestellungen) as Map<String, dynamic>;
+      _bestellungen.clear();
+      decoded.forEach((wache, v) {
+        final m = v as Map<String, dynamic>;
+        final positionen = (m['positionen'] as List)
+            .map((e) => BestellPosition.fromJson(e as Map<String, dynamic>))
+            .toList();
+        _bestellungen[wache] = Bestellung(bestellNr: m['nr'] as String?, wache: wache, positionen: positionen);
+      });
+      setState(() => _ausgewaehlteWache = _bestellungen.keys.isNotEmpty ? _bestellungen.keys.first : null);
     }
   }
 
@@ -135,18 +151,17 @@ class _RootScreenState extends State<RootScreen> {
     await prefs.setString('lager_daten', encoded);
   }
 
-  Future<void> _bestellungSpeichern() async {
+  Future<void> _bestellungenSpeichern() async {
     final prefs = await SharedPreferences.getInstance();
-    if (_positionen.isEmpty) {
-      await prefs.remove('aktuelle_bestellung');
+    if (_bestellungen.isEmpty) {
+      await prefs.remove('bestellungen');
       return;
     }
-    final encoded = jsonEncode({
-      'nr': _bestellNr,
-      'wache': _bestellWache,
-      'positionen': _positionen.map((e) => e.toJson()).toList(),
-    });
-    await prefs.setString('aktuelle_bestellung', encoded);
+    final encoded = jsonEncode(_bestellungen.map((wache, b) => MapEntry(wache, {
+          'nr': b.bestellNr,
+          'positionen': b.positionen.map((e) => e.toJson()).toList(),
+        })));
+    await prefs.setString('bestellungen', encoded);
   }
 
   // ---------------- Lagerliste-Import ----------------
@@ -244,13 +259,25 @@ class _RootScreenState extends State<RootScreen> {
         setState(() => _bestellFehler = 'Es konnten keine Positionen in dieser PDF erkannt werden.');
         return;
       }
+      final wache = bestellung.wache;
+      if (wache == null) {
+        setState(() => _bestellFehler = 'Die bestellende Wache konnte in dieser PDF nicht erkannt werden.');
+        return;
+      }
 
       setState(() {
-        _bestellNr = bestellung.bestellNr;
-        _bestellWache = bestellung.wache;
-        _positionen = bestellung.positionen;
+        _bestellungen[wache] = bestellung;
+        _ausgewaehlteWache = wache;
       });
-      await _bestellungSpeichern();
+      await _bestellungenSpeichern();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$wache: ${bestellung.positionen.length} Positionen importiert'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (e) {
       setState(() => _bestellFehler = 'PDF konnte nicht gelesen werden: $e');
     } finally {
@@ -258,18 +285,72 @@ class _RootScreenState extends State<RootScreen> {
     }
   }
 
-  Future<void> _bestellungZuruecksetzen() async {
+  Future<void> _allesLeerenBestaetigen() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('ALLE BESTELLUNGEN LEEREN?', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text('Die importierten Bestellungen aller ${_bestellungen.length} Wache(n) werden entfernt.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ABBRECHEN')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('LEEREN', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      setState(() {
+        _bestellungen.clear();
+        _ausgewaehlteWache = null;
+      });
+      await _bestellungenSpeichern();
+    }
+  }
+
+  Future<void> _bestellungEntfernen(String wache) async {
     setState(() {
-      _bestellNr = null;
-      _bestellWache = null;
-      _positionen = [];
+      _bestellungen.remove(wache);
+      if (_ausgewaehlteWache == wache) {
+        _ausgewaehlteWache = _bestellungen.keys.isNotEmpty ? _bestellungen.keys.first : null;
+      }
     });
-    await _bestellungSpeichern();
+    await _bestellungenSpeichern();
   }
 
   Future<void> _toggleAbgehakt(BestellPosition pos) async {
     setState(() => pos.abgehakt = !pos.abgehakt);
-    await _bestellungSpeichern();
+    await _bestellungenSpeichern();
+  }
+
+  /// Hakt eine ganze Sammel-Gruppe (Artikel an einem Lagerort, über alle
+  /// Wachen hinweg) auf einmal ab bzw. wieder zurück.
+  Future<void> _toggleGruppe(List<BestellPosition> gruppe) async {
+    final neuerStatus = !gruppe.every((p) => p.abgehakt);
+    setState(() {
+      for (final p in gruppe) {
+        p.abgehakt = neuerStatus;
+      }
+    });
+    await _bestellungenSpeichern();
+  }
+
+  List<_AggregatEintrag> _buildAggregat() {
+    final Map<String, _AggregatEintrag> byKey = {};
+    for (final entry in _bestellungen.entries) {
+      final wache = entry.key;
+      for (final pos in entry.value.positionen) {
+        final ort = _lagerortFuer(pos) ?? 'Lagerort unbekannt';
+        final key = '${pos.name} $ort';
+        byKey.putIfAbsent(key, () => _AggregatEintrag(pos.name, ort, [])).proWache.add(MapEntry(wache, pos));
+      }
+    }
+    final list = byKey.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+    return list;
   }
 
   /// Lagerort je Position im Hauptlager auflösen. Die Bestellung kommt von
@@ -313,11 +394,11 @@ class _RootScreenState extends State<RootScreen> {
         automaticallyImplyLeading: false,
         title: const Text('KOMMISSIONIEREN', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
         actions: [
-          if (_positionen.isNotEmpty)
+          if (_bestellungen.isNotEmpty)
             IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Neue Bestellung importieren',
-              onPressed: _bestellungZuruecksetzen,
+              icon: const Icon(Icons.delete_sweep_outlined),
+              tooltip: 'Alle Bestellungen leeren',
+              onPressed: _allesLeerenBestaetigen,
             ),
           IconButton(
             icon: _isParsingBestellung
@@ -334,37 +415,214 @@ class _RootScreenState extends State<RootScreen> {
           padding: const EdgeInsets.all(16),
           child: Text(_bestellFehler!, style: const TextStyle(color: Colors.red)),
         ),
-      Expanded(
-        child: _positionen.isEmpty
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.playlist_add_check, size: 60, color: Colors.grey),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Noch keine Bestellung importiert.\nOben rechts eine Bestellung (PDF) hochladen.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ]),
+      if (_bestellungen.isEmpty)
+        Expanded(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.playlist_add_check, size: 60, color: Colors.grey),
+                const SizedBox(height: 16),
+                const Text(
+                  'Noch keine Bestellung importiert.\nOben rechts eine Bestellung (PDF) hochladen.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey),
                 ),
-              )
-            : _buildKommissionierListe(),
+              ]),
+            ),
+          ),
+        )
+      else ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(value: 0, label: Text('SAMMELLISTE'), icon: Icon(Icons.inventory_2_outlined)),
+              ButtonSegment(value: 1, label: Text('JE WACHE'), icon: Icon(Icons.local_shipping_outlined)),
+            ],
+            selected: {_kommAnsicht},
+            onSelectionChanged: (s) => setState(() => _kommAnsicht = s.first),
+            style: SegmentedButton.styleFrom(
+              backgroundColor: _card,
+              foregroundColor: Colors.white70,
+              selectedBackgroundColor: _red,
+              selectedForegroundColor: Colors.white,
+            ),
+          ),
+        ),
+        Expanded(child: _kommAnsicht == 0 ? _buildSammelliste() : _buildJeWache()),
+      ],
+    ]);
+  }
+
+  Widget _buildLagerlisteWarnung() {
+    if (_lager[_aktivesLager] != null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Row(children: [
+        const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 16),
+        const SizedBox(width: 6),
+        const Expanded(
+          child: Text(
+            'Es ist noch keine Lagerliste des Hauptlagers importiert – Lagerorte können nicht zugeordnet werden.',
+            style: TextStyle(color: Colors.orange, fontSize: 12),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildLocationHeader(String ort) {
+    final unbekannt = ort == 'Lagerort unbekannt';
+    return Container(
+      margin: const EdgeInsets.only(top: 12, bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: (unbekannt ? Colors.orange : _red).withValues(alpha: 0.4)),
+      ),
+      child: Row(children: [
+        Icon(unbekannt ? Icons.help_outline : Icons.location_on,
+            color: unbekannt ? Colors.orange : _red, size: 16),
+        const SizedBox(width: 8),
+        Text(ort.toUpperCase(),
+            style: TextStyle(
+                color: unbekannt ? Colors.orange : Colors.white,
+                fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+      ]),
+    );
+  }
+
+  // ---- Sammelliste: über alle Wachen aggregiert ----
+
+  Widget _buildSammelliste() {
+    final aggregat = _buildAggregat();
+    final byOrt = <String, List<_AggregatEintrag>>{};
+    for (final a in aggregat) {
+      byOrt.putIfAbsent(a.lagerort, () => []).add(a);
+    }
+    final keys = byOrt.keys.toList()
+      ..sort((a, b) {
+        if (a == 'Lagerort unbekannt') return -1;
+        if (b == 'Lagerort unbekannt') return 1;
+        return a.compareTo(b);
+      });
+    final erledigt = aggregat.where((a) => a.abgehakt).length;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Row(children: [
+          Expanded(
+            child: Text('${_bestellungen.length} Wache(n) offen: ${_bestellungen.keys.join(', ')}',
+                style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13)),
+          ),
+          Text('$erledigt / ${aggregat.length}', style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
+        ]),
+      ),
+      _buildLagerlisteWarnung(),
+      Expanded(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+          children: keys.map((ort) {
+            final items = byOrt[ort]!;
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              _buildLocationHeader(ort),
+              ...items.map(_buildAggregatCard),
+            ]);
+          }).toList(),
+        ),
       ),
     ]);
   }
 
-  Widget _buildKommissionierListe() {
-    final erledigt = _positionen.where((p) => p.abgehakt).length;
-    final byLagerort = <String, List<BestellPosition>>{};
-    final sortiert = List<BestellPosition>.from(_positionen)
-      ..sort((a, b) => a.name.compareTo(b.name));
+  Widget _buildAggregatCard(_AggregatEintrag a) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      decoration: BoxDecoration(
+        color: a.abgehakt ? Colors.green.withValues(alpha: 0.08) : _card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: a.abgehakt ? Colors.green.withValues(alpha: 0.4) : Colors.white10),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(a.name,
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 16,
+                      color: a.abgehakt ? Colors.white38 : Colors.white,
+                      decoration: a.abgehakt ? TextDecoration.lineThrough : null)),
+              const SizedBox(height: 8),
+              ...a.proWache.map((e) => Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Row(children: [
+                      Expanded(
+                        child: Text(e.key,
+                            style: const TextStyle(color: Colors.grey, fontSize: 13),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      const SizedBox(width: 6),
+                      Text('${e.value.menge} ${e.value.einheit}',
+                          style: const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.bold)),
+                    ]),
+                  )),
+            ]),
+          ),
+          const SizedBox(width: 12),
+          Column(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: _red.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _red.withValues(alpha: 0.4)),
+              ),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Text('AUS DEM SCHRANK',
+                    style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 0.6)),
+                Text('${a.gesamt}',
+                    style: const TextStyle(color: _red, fontWeight: FontWeight.bold, fontSize: 18)),
+                Text(a.einheit, style: const TextStyle(color: Colors.grey, fontSize: 10)),
+              ]),
+            ),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => _toggleGruppe(a.proWache.map((e) => e.value).toList()),
+              child: Container(
+                width: 36, height: 36,
+                decoration: BoxDecoration(
+                  color: (a.abgehakt ? Colors.green : Colors.white).withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: a.abgehakt ? Colors.green : Colors.white24, width: 1.5),
+                ),
+                child: Icon(Icons.check, color: a.abgehakt ? Colors.green : Colors.white38, size: 18),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  // ---- Je Wache: einzelne Bestellung ----
+
+  Widget _buildJeWache() {
+    final wachen = _bestellungen.keys.toList()..sort();
+    final ausgewaehlt =
+        (_ausgewaehlteWache != null && wachen.contains(_ausgewaehlteWache)) ? _ausgewaehlteWache! : wachen.first;
+    final bestellung = _bestellungen[ausgewaehlt]!;
+    final erledigt = bestellung.positionen.where((p) => p.abgehakt).length;
+
+    final byOrt = <String, List<BestellPosition>>{};
+    final sortiert = List<BestellPosition>.from(bestellung.positionen)..sort((a, b) => a.name.compareTo(b.name));
     for (final pos in sortiert) {
       final ort = _lagerortFuer(pos) ?? 'Lagerort unbekannt';
-      byLagerort.putIfAbsent(ort, () => []).add(pos);
+      byOrt.putIfAbsent(ort, () => []).add(pos);
     }
-    final keys = byLagerort.keys.toList()
+    final keys = byOrt.keys.toList()
       ..sort((a, b) {
         if (a == 'Lagerort unbekannt') return -1;
         if (b == 'Lagerort unbekannt') return 1;
@@ -373,60 +631,38 @@ class _RootScreenState extends State<RootScreen> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
         child: Row(children: [
-          Expanded(
-            child: Text(
-              [
-                if (_bestellWache != null) _bestellWache! else 'Wache unbekannt',
-                if (_bestellNr != null) 'Bestellung $_bestellNr',
-              ].join(' · '),
-              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
-            ),
+          DropdownButton<String>(
+            value: ausgewaehlt,
+            dropdownColor: _card,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            items: wachen.map((w) => DropdownMenuItem(value: w, child: Text(w))).toList(),
+            onChanged: (v) => setState(() => _ausgewaehlteWache = v),
           ),
-          Text('$erledigt / ${_positionen.length}',
+          const Spacer(),
+          Text('$erledigt / ${bestellung.positionen.length}',
               style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+            tooltip: 'Diese Bestellung entfernen',
+            onPressed: () => _bestellungEntfernen(ausgewaehlt),
+          ),
         ]),
       ),
-      if (_lager[_aktivesLager] == null)
+      if (bestellung.bestellNr != null)
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Row(children: [
-            const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 16),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                'Es ist noch keine Lagerliste des Hauptlagers importiert – Lagerorte können nicht zugeordnet werden.',
-                style: const TextStyle(color: Colors.orange, fontSize: 12),
-              ),
-            ),
-          ]),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: Text('Bestellung ${bestellung.bestellNr}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
         ),
+      _buildLagerlisteWarnung(),
       Expanded(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
           children: keys.map((ort) {
-            final items = byLagerort[ort]!;
-            final unbekannt = ort == 'Lagerort unbekannt';
+            final items = byOrt[ort]!;
             return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(
-                margin: const EdgeInsets.only(top: 12, bottom: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: _card,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: (unbekannt ? Colors.orange : _red).withValues(alpha: 0.4)),
-                ),
-                child: Row(children: [
-                  Icon(unbekannt ? Icons.help_outline : Icons.location_on,
-                      color: unbekannt ? Colors.orange : _red, size: 16),
-                  const SizedBox(width: 8),
-                  Text(ort.toUpperCase(),
-                      style: TextStyle(
-                          color: unbekannt ? Colors.orange : Colors.white,
-                          fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-                ]),
-              ),
+              _buildLocationHeader(ort),
               ...items.map((pos) => Container(
                     margin: const EdgeInsets.symmetric(vertical: 3),
                     decoration: BoxDecoration(
