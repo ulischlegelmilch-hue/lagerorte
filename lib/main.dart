@@ -570,15 +570,15 @@ class _RootScreenState extends State<RootScreen> {
               const SizedBox(height: 8),
               ...a.proWache.map((e) => Padding(
                     padding: const EdgeInsets.only(top: 2),
-                    child: Row(children: [
-                      Text('${e.value.menge} ${e.value.einheit}',
-                          style: const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.bold)),
-                      const SizedBox(width: 8),
-                      Expanded(
+                    child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      Flexible(
                         child: Text(e.key,
                             style: const TextStyle(color: Colors.grey, fontSize: 13),
                             overflow: TextOverflow.ellipsis),
                       ),
+                      const SizedBox(width: 8),
+                      Text('${e.value.menge} ${e.value.einheit}',
+                          style: const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.bold)),
                     ]),
                   )),
             ]),
