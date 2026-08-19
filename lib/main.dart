@@ -62,29 +62,14 @@ class GateScreen extends StatefulWidget {
 }
 
 class _GateScreenState extends State<GateScreen> {
-  bool _isLoading = true;
+  // Nur im Speicher (nicht persistiert) - Passwort wird bei jedem Öffnen
+  // der App erneut verlangt.
   bool _freigeschaltet = false;
   final _passwortCtrl = TextEditingController();
   String? _fehler;
 
-  @override
-  void initState() {
-    super.initState();
-    _pruefen();
-  }
-
-  Future<void> _pruefen() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _freigeschaltet = prefs.getBool('freigeschaltet') ?? false;
-      _isLoading = false;
-    });
-  }
-
-  Future<void> _freischalten() async {
+  void _freischalten() {
     if (_passwortCtrl.text.trim() == _zugangsPasswort) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('freigeschaltet', true);
       setState(() {
         _freigeschaltet = true;
         _fehler = null;
@@ -96,12 +81,6 @@ class _GateScreenState extends State<GateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Scaffold(
-        backgroundColor: _bg,
-        body: Center(child: CircularProgressIndicator(color: _red)),
-      );
-    }
 
     if (DateTime.now().isAfter(_stichtag)) {
       return const Scaffold(
