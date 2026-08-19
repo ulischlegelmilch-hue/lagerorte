@@ -11,6 +11,9 @@ const _card = Color(0xFF1E1E22);
 
 const _bekannteWachen = ['Bad Salzungen', 'Vacha', 'Gumpelstadt', 'Dermbach', 'Geisa'];
 
+const _zugangsPasswort = 'DRK2026';
+final _stichtag = DateTime(2026, 12, 31, 23, 59, 59);
+
 /// Ein Artikel an einem Lagerort, aggregiert über alle offenen Bestellungen
 /// hinweg: wie viel insgesamt aus dem Fach zu nehmen ist, aufgeschlüsselt
 /// danach, wie viel davon an welche Wache geht.
@@ -45,8 +48,131 @@ class LagerorteApp extends StatelessWidget {
         scaffoldBackgroundColor: _bg,
         colorScheme: const ColorScheme.dark(primary: _red, surface: _card),
       ),
-      home: const RootScreen(),
+      home: const GateScreen(),
     );
+  }
+}
+
+/// Sperrt die App bis zur Passworteingabe (einmalig pro Gerät, danach lokal
+/// gemerkt) und ab dem Stichtag komplett, unabhängig vom Passwort.
+class GateScreen extends StatefulWidget {
+  const GateScreen({super.key});
+  @override
+  State<GateScreen> createState() => _GateScreenState();
+}
+
+class _GateScreenState extends State<GateScreen> {
+  bool _isLoading = true;
+  bool _freigeschaltet = false;
+  final _passwortCtrl = TextEditingController();
+  String? _fehler;
+
+  @override
+  void initState() {
+    super.initState();
+    _pruefen();
+  }
+
+  Future<void> _pruefen() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _freigeschaltet = prefs.getBool('freigeschaltet') ?? false;
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _freischalten() async {
+    if (_passwortCtrl.text.trim() == _zugangsPasswort) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('freigeschaltet', true);
+      setState(() {
+        _freigeschaltet = true;
+        _fehler = null;
+      });
+    } else {
+      setState(() => _fehler = 'Falsches Passwort');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: _bg,
+        body: Center(child: CircularProgressIndicator(color: _red)),
+      );
+    }
+
+    if (DateTime.now().isAfter(_stichtag)) {
+      return const Scaffold(
+        backgroundColor: _bg,
+        body: Center(
+          child: Padding(
+            padding: EdgeInsets.all(32),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(Icons.event_busy, size: 60, color: Colors.grey),
+              SizedBox(height: 16),
+              Text(
+                'Diese Version ist abgelaufen.\nBitte bei Uli nach einer aktuellen Version fragen.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey, fontSize: 16),
+              ),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    if (!_freigeschaltet) {
+      return Scaffold(
+        backgroundColor: _bg,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.lock_outline, size: 60, color: _red),
+              const SizedBox(height: 20),
+              const Text('LAGERORTE',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20, letterSpacing: 1.5)),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: 260,
+                child: TextField(
+                  controller: _passwortCtrl,
+                  obscureText: true,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Passwort',
+                    labelStyle: const TextStyle(color: Colors.grey),
+                    errorText: _fehler,
+                    filled: true,
+                    fillColor: _card,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                  ),
+                  onSubmitted: (_) => _freischalten(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: 260,
+                child: ElevatedButton(
+                  onPressed: _freischalten,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _red,
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: const Text('ENTSPERREN', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    return const RootScreen();
   }
 }
 
