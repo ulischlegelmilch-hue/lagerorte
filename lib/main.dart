@@ -14,6 +14,40 @@ const _bekannteWachen = ['Bad Salzungen', 'Vacha', 'Gumpelstadt', 'Dermbach', 'G
 const _zugangsPasswort = 'DRK2026';
 final _stichtag = DateTime(2026, 12, 31, 23, 59, 59);
 
+/// Sortierschlüssel für Lagerorte: erst Schränke (S1..S8 bzw. "Schrank X",
+/// numerisch aufsteigend), dann Regale (R1.. bzw. "Regal X"), dann der Rest
+/// alphabetisch, ganz zum Schluss "Lagerort unbekannt". Die Rohdaten
+/// schreiben denselben Ort teils unterschiedlich (z.B. "S8" und "Schrank 8",
+/// "R2 E2" und "Regal 2 E1") – beide Schreibweisen werden erkannt, damit sie
+/// nebeneinander einsortiert werden.
+class _LagerortSortKey implements Comparable<_LagerortSortKey> {
+  final int kategorie; // 0 = Schrank, 1 = Regal, 2 = Rest, 3 = unbekannt
+  final int nummer;
+  final String rest;
+  _LagerortSortKey(this.kategorie, this.nummer, this.rest);
+
+  @override
+  int compareTo(_LagerortSortKey other) {
+    if (kategorie != other.kategorie) return kategorie.compareTo(other.kategorie);
+    if (nummer != other.nummer) return nummer.compareTo(other.nummer);
+    return rest.compareTo(other.rest);
+  }
+}
+
+_LagerortSortKey _lagerortSortKey(String ort) {
+  if (ort == 'Lagerort unbekannt') return _LagerortSortKey(3, 0, ort);
+
+  final schrankM = RegExp(r'^S(?:chrank)?\.?\s*(\d+)', caseSensitive: false).firstMatch(ort);
+  if (schrankM != null) return _LagerortSortKey(0, int.parse(schrankM.group(1)!), ort);
+  if (ort.toLowerCase().contains('schrank')) return _LagerortSortKey(0, 999, ort);
+
+  final regalM = RegExp(r'^R(?:egal)?\.?\s*(\d+)', caseSensitive: false).firstMatch(ort);
+  if (regalM != null) return _LagerortSortKey(1, int.parse(regalM.group(1)!), ort);
+  if (ort.toLowerCase().contains('regal')) return _LagerortSortKey(1, 999, ort);
+
+  return _LagerortSortKey(2, 0, ort);
+}
+
 /// Ein Artikel an einem Lagerort, aggregiert über alle offenen Bestellungen
 /// hinweg: wie viel insgesamt aus dem Fach zu nehmen ist, aufgeschlüsselt
 /// danach, wie viel davon an welche Wache geht.
@@ -620,11 +654,7 @@ class _RootScreenState extends State<RootScreen> {
       byOrt.putIfAbsent(a.lagerort, () => []).add(a);
     }
     final keys = byOrt.keys.toList()
-      ..sort((a, b) {
-        if (a == 'Lagerort unbekannt') return -1;
-        if (b == 'Lagerort unbekannt') return 1;
-        return a.compareTo(b);
-      });
+      ..sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b)));
     final erledigt = aggregat.where((a) => a.abgehakt).length;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -740,11 +770,7 @@ class _RootScreenState extends State<RootScreen> {
       byOrt.putIfAbsent(ort, () => []).add(pos);
     }
     final keys = byOrt.keys.toList()
-      ..sort((a, b) {
-        if (a == 'Lagerort unbekannt') return -1;
-        if (b == 'Lagerort unbekannt') return 1;
-        return a.compareTo(b);
-      });
+      ..sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b)));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
