@@ -243,43 +243,55 @@ class _RootScreenState extends State<RootScreen> {
 
   // ---------------- Bestellung-Import / Kommissionieren ----------------
 
+  /// Erlaubt die Auswahl mehrerer Bestellungs-PDFs auf einmal (z.B. alle
+  /// Außenlager einer Lieferung in einem Rutsch importieren). Jede PDF wird
+  /// einzeln geparst; eine fehlerhafte Datei blockiert die anderen nicht.
   Future<void> _bestellungPdfImportieren() async {
     setState(() => _bestellFehler = null);
     final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
     if (result.isEmpty) return;
-    final picked = result.first;
 
     setState(() => _isParsingBestellung = true);
+    final erfolgreich = <String>[];
+    final fehler = <String>[];
     try {
-      final bytes = await picked.readAsBytes();
-      final text = extractPdfText(bytes);
-      final bestellung = parseBestellung(text, _bekannteWachen);
+      for (final picked in result) {
+        try {
+          final bytes = await picked.readAsBytes();
+          final text = extractPdfText(bytes);
+          final bestellung = parseBestellung(text, _bekannteWachen);
 
-      if (bestellung.positionen.isEmpty) {
-        setState(() => _bestellFehler = 'Es konnten keine Positionen in dieser PDF erkannt werden.');
-        return;
-      }
-      final wache = bestellung.wache;
-      if (wache == null) {
-        setState(() => _bestellFehler = 'Die bestellende Wache konnte in dieser PDF nicht erkannt werden.');
-        return;
+          if (bestellung.positionen.isEmpty) {
+            fehler.add('${picked.name}: keine Positionen erkannt');
+            continue;
+          }
+          final wache = bestellung.wache;
+          if (wache == null) {
+            fehler.add('${picked.name}: Wache nicht erkannt');
+            continue;
+          }
+          _bestellungen[wache] = bestellung;
+          erfolgreich.add(wache);
+        } catch (e) {
+          fehler.add('${picked.name}: $e');
+        }
       }
 
-      setState(() {
-        _bestellungen[wache] = bestellung;
-        _ausgewaehlteWache = wache;
-      });
-      await _bestellungenSpeichern();
-      if (mounted) {
+      if (erfolgreich.isNotEmpty) {
+        setState(() => _ausgewaehlteWache = erfolgreich.last);
+        await _bestellungenSpeichern();
+      }
+      if (mounted && erfolgreich.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('$wache: ${bestellung.positionen.length} Positionen importiert'),
+            content: Text('${erfolgreich.length} Bestellung(en) importiert: ${erfolgreich.join(', ')}'),
             backgroundColor: Colors.green,
           ),
         );
       }
-    } catch (e) {
-      setState(() => _bestellFehler = 'PDF konnte nicht gelesen werden: $e');
+      if (fehler.isNotEmpty) {
+        setState(() => _bestellFehler = fehler.join('\n'));
+      }
     } finally {
       if (mounted) setState(() => _isParsingBestellung = false);
     }
@@ -345,7 +357,7 @@ class _RootScreenState extends State<RootScreen> {
       final wache = entry.key;
       for (final pos in entry.value.positionen) {
         final ort = _lagerortFuer(pos) ?? 'Lagerort unbekannt';
-        final key = '${pos.name} $ort';
+        final key = '${pos.name} $ort';
         byKey.putIfAbsent(key, () => _AggregatEintrag(pos.name, ort, [])).proWache.add(MapEntry(wache, pos));
       }
     }
@@ -559,14 +571,14 @@ class _RootScreenState extends State<RootScreen> {
               ...a.proWache.map((e) => Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Row(children: [
+                      Text('${e.value.menge} ${e.value.einheit}',
+                          style: const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Text(e.key,
                             style: const TextStyle(color: Colors.grey, fontSize: 13),
                             overflow: TextOverflow.ellipsis),
                       ),
-                      const SizedBox(width: 6),
-                      Text('${e.value.menge} ${e.value.einheit}',
-                          style: const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.bold)),
                     ]),
                   )),
             ]),
