@@ -16,36 +16,55 @@ final _stichtag = DateTime(2026, 12, 31, 23, 59, 59);
 
 /// Sortierschlüssel für Lagerorte: erst Schränke (S1..S8 bzw. "Schrank X",
 /// numerisch aufsteigend), dann Regale (R1.. bzw. "Regal X"), dann der Rest
-/// alphabetisch, ganz zum Schluss "Lagerort unbekannt". Die Rohdaten
-/// schreiben denselben Ort teils unterschiedlich (z.B. "S8" und "Schrank 8",
-/// "R2 E2" und "Regal 2 E1") – beide Schreibweisen werden erkannt, damit sie
-/// nebeneinander einsortiert werden.
+/// alphabetisch, ganz zum Schluss "Lagerort unbekannt". Innerhalb eines
+/// Schranks/Regals wird zusätzlich nach Ebene sortiert (z.B. "S1 E1" vor
+/// "S1 E2"; ein Schrank ohne Ebenenangabe wie "S7" vor seinen Ebenen; "oben
+/// drauf" nach den nummerierten Ebenen). Die Rohdaten schreiben denselben
+/// Ort teils unterschiedlich (z.B. "S8" und "Schrank 8", "S4 E1" und "S4E1",
+/// "R2 E2" und "Regal 2 E1") – all diese Schreibweisen werden erkannt, damit
+/// sie an derselben Stelle einsortiert werden.
 class _LagerortSortKey implements Comparable<_LagerortSortKey> {
   final int kategorie; // 0 = Schrank, 1 = Regal, 2 = Rest, 3 = unbekannt
   final int nummer;
+  final int ebene;
   final String rest;
-  _LagerortSortKey(this.kategorie, this.nummer, this.rest);
+  _LagerortSortKey(this.kategorie, this.nummer, this.ebene, this.rest);
 
   @override
   int compareTo(_LagerortSortKey other) {
     if (kategorie != other.kategorie) return kategorie.compareTo(other.kategorie);
     if (nummer != other.nummer) return nummer.compareTo(other.nummer);
+    if (ebene != other.ebene) return ebene.compareTo(other.ebene);
     return rest.compareTo(other.rest);
   }
 }
 
+/// Ermittelt die Ebenen-Nummer aus dem Rest eines Lagerort-Strings nach dem
+/// Schrank-/Regal-Namen (z.B. " E1" -> 1). -1 = keine Ebene angegeben
+/// (sortiert vor den Ebenen), 999 = "oben drauf" (sortiert nach den Ebenen).
+int _ebeneVon(String rest) {
+  final m = RegExp(r'E\s*(\d+)', caseSensitive: false).firstMatch(rest);
+  if (m != null) return int.parse(m.group(1)!);
+  if (rest.toLowerCase().contains('oben')) return 999;
+  return -1;
+}
+
 _LagerortSortKey _lagerortSortKey(String ort) {
-  if (ort == 'Lagerort unbekannt') return _LagerortSortKey(3, 0, ort);
+  if (ort == 'Lagerort unbekannt') return _LagerortSortKey(3, 0, 0, ort);
 
   final schrankM = RegExp(r'^S(?:chrank)?\.?\s*(\d+)', caseSensitive: false).firstMatch(ort);
-  if (schrankM != null) return _LagerortSortKey(0, int.parse(schrankM.group(1)!), ort);
-  if (ort.toLowerCase().contains('schrank')) return _LagerortSortKey(0, 999, ort);
+  if (schrankM != null) {
+    return _LagerortSortKey(0, int.parse(schrankM.group(1)!), _ebeneVon(ort.substring(schrankM.end)), ort);
+  }
+  if (ort.toLowerCase().contains('schrank')) return _LagerortSortKey(0, 999, 0, ort);
 
   final regalM = RegExp(r'^R(?:egal)?\.?\s*(\d+)', caseSensitive: false).firstMatch(ort);
-  if (regalM != null) return _LagerortSortKey(1, int.parse(regalM.group(1)!), ort);
-  if (ort.toLowerCase().contains('regal')) return _LagerortSortKey(1, 999, ort);
+  if (regalM != null) {
+    return _LagerortSortKey(1, int.parse(regalM.group(1)!), _ebeneVon(ort.substring(regalM.end)), ort);
+  }
+  if (ort.toLowerCase().contains('regal')) return _LagerortSortKey(1, 999, 0, ort);
 
-  return _LagerortSortKey(2, 0, ort);
+  return _LagerortSortKey(2, 0, 0, ort);
 }
 
 /// Ein Artikel an einem Lagerort, aggregiert über alle offenen Bestellungen
