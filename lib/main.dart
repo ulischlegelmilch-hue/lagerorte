@@ -503,10 +503,14 @@ class _RootScreenState extends State<RootScreen> {
         await _bestellungenSpeichern();
       }
       if (mounted && erfolgreich.isNotEmpty) {
+        final fehlend = _bekannteWachen.where((w) => !_bestellungen.containsKey(w)).toList();
+        final hinweis = fehlend.isEmpty
+            ? 'Alle ${_bekannteWachen.length} Wachen eingelesen.'
+            : 'Es fehlen noch: ${fehlend.join(', ')}.';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${erfolgreich.length} Bestellung(en) importiert: ${erfolgreich.join(', ')}'),
-            backgroundColor: Colors.green,
+            content: Text('${erfolgreich.length} Bestellung(en) importiert: ${erfolgreich.join(', ')}. $hinweis'),
+            backgroundColor: fehlend.isEmpty ? Colors.green : Colors.orange,
           ),
         );
       }
@@ -749,6 +753,7 @@ class _RootScreenState extends State<RootScreen> {
           ),
         ],
       ),
+      if (_bestellungen.isNotEmpty) _buildWachenStatus(),
       if (_bestellFehler != null)
         Padding(
           padding: const EdgeInsets.all(16),
@@ -792,6 +797,48 @@ class _RootScreenState extends State<RootScreen> {
         Expanded(child: _kommAnsicht == 0 ? _buildSammelliste() : _buildJeWache()),
       ],
     ]);
+  }
+
+  /// Zeigt alle bekannten Außenlager als Chips – grün/Haken sobald ihre
+  /// Bestellung eingelesen wurde, sonst grau/umrandet mit Warnsymbol. So ist
+  /// auf einen Blick ersichtlich, ob schon alle Wachen importiert sind.
+  Widget _buildWachenStatus() {
+    final fehlend = _bekannteWachen.where((w) => !_bestellungen.containsKey(w)).length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final w in _bekannteWachen)
+            Chip(
+              avatar: Icon(
+                _bestellungen.containsKey(w) ? Icons.check_circle : Icons.radio_button_unchecked,
+                color: _bestellungen.containsKey(w) ? Colors.green : Colors.white38,
+                size: 16,
+              ),
+              label: Text(w, style: TextStyle(
+                  color: _bestellungen.containsKey(w) ? Colors.white : Colors.white38,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600)),
+              backgroundColor: _bestellungen.containsKey(w) ? Colors.green.withValues(alpha: 0.12) : _card,
+              side: BorderSide(color: _bestellungen.containsKey(w) ? Colors.green.withValues(alpha: 0.4) : Colors.white10),
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          if (fehlend == 0)
+            const Chip(
+              avatar: Icon(Icons.done_all, color: Colors.green, size: 16),
+              label: Text('ALLE WACHEN EINGELESEN',
+                  style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold)),
+              backgroundColor: Colors.transparent,
+              side: BorderSide(color: Colors.green),
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+        ],
+      ),
+    );
   }
 
   Widget _buildLagerlisteWarnung() {
