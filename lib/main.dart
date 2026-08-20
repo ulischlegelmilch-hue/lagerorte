@@ -14,15 +14,17 @@ const _bekannteWachen = ['Bad Salzungen', 'Vacha', 'Gumpelstadt', 'Dermbach', 'G
 const _zugangsPasswort = 'DRK2026';
 final _stichtag = DateTime(2026, 12, 31, 23, 59, 59);
 
-/// Sortierschlüssel für Lagerorte: erst Schränke (S1..S8 bzw. "Schrank X",
-/// numerisch aufsteigend), dann Regale (R1.. bzw. "Regal X"), dann der Rest
-/// alphabetisch, ganz zum Schluss "Lagerort unbekannt". Innerhalb eines
-/// Schranks/Regals wird zusätzlich nach Ebene sortiert (z.B. "S1 E1" vor
-/// "S1 E2"; ein Schrank ohne Ebenenangabe wie "S7" vor seinen Ebenen; "oben
-/// drauf" nach den nummerierten Ebenen). Die Rohdaten schreiben denselben
-/// Ort teils unterschiedlich (z.B. "S8" und "Schrank 8", "S4 E1" und "S4E1",
-/// "R2 E2" und "Regal 2 E1") – all diese Schreibweisen werden erkannt, damit
-/// sie an derselben Stelle einsortiert werden.
+/// Sortierschlüssel für Lagerorte – von Uli festgelegte Reihenfolge:
+/// 0 = Schränke S1..S5, 1 = Kinderschrank, 2 = restliche Schränke (S6+, S7,
+/// S8, MPG Schrank, ...), 3 = Regale, 4 = Palette, 5 = Desigarage, 6 =
+/// KTW-Raum, 7 = alles andere (alphabetisch), 8 = "Lagerort unbekannt"
+/// (immer zuletzt). Innerhalb eines Schranks/Regals wird zusätzlich nach
+/// Ebene sortiert (z.B. "S1 E1" vor "S1 E2"; ein Schrank ohne Ebenenangabe
+/// wie "S7" vor seinen Ebenen; "oben drauf" nach den nummerierten Ebenen).
+/// Die Rohdaten schreiben denselben Ort teils unterschiedlich (z.B. "S8"
+/// und "Schrank 8", "S4 E1" und "S4E1", "R2 E2" und "Regal 2 E1") – all
+/// diese Schreibweisen werden erkannt, damit sie an derselben Stelle
+/// einsortiert werden.
 class _LagerortSortKey implements Comparable<_LagerortSortKey> {
   final int kategorie; // 0 = Schrank, 1 = Regal, 2 = Rest, 3 = unbekannt
   final int nummer;
@@ -50,21 +52,33 @@ int _ebeneVon(String rest) {
 }
 
 _LagerortSortKey _lagerortSortKey(String ort) {
-  if (ort == 'Lagerort unbekannt') return _LagerortSortKey(3, 0, 0, ort);
+  if (ort == 'Lagerort unbekannt') return _LagerortSortKey(8, 0, 0, ort);
+
+  final ortLower = ort.toLowerCase();
+
+  if (ortLower.contains('kinderschrank')) return _LagerortSortKey(1, 0, 0, ort);
 
   final schrankM = RegExp(r'^S(?:chrank)?\.?\s*(\d+)', caseSensitive: false).firstMatch(ort);
   if (schrankM != null) {
-    return _LagerortSortKey(0, int.parse(schrankM.group(1)!), _ebeneVon(ort.substring(schrankM.end)), ort);
+    final nummer = int.parse(schrankM.group(1)!);
+    final kategorie = nummer <= 5 ? 0 : 2;
+    return _LagerortSortKey(kategorie, nummer, _ebeneVon(ort.substring(schrankM.end)), ort);
   }
-  if (ort.toLowerCase().contains('schrank')) return _LagerortSortKey(0, 999, 0, ort);
+  if (ortLower.contains('schrank')) return _LagerortSortKey(2, 999, 0, ort);
 
   final regalM = RegExp(r'^R(?:egal)?\.?\s*(\d+)', caseSensitive: false).firstMatch(ort);
   if (regalM != null) {
-    return _LagerortSortKey(1, int.parse(regalM.group(1)!), _ebeneVon(ort.substring(regalM.end)), ort);
+    return _LagerortSortKey(3, int.parse(regalM.group(1)!), _ebeneVon(ort.substring(regalM.end)), ort);
   }
-  if (ort.toLowerCase().contains('regal')) return _LagerortSortKey(1, 999, 0, ort);
+  if (ortLower.contains('regal')) return _LagerortSortKey(3, 999, 0, ort);
 
-  return _LagerortSortKey(2, 0, 0, ort);
+  if (ortLower.contains('palette')) return _LagerortSortKey(4, 0, 0, ort);
+  if (ortLower.contains('desigarage') || ortLower.contains('desiraum')) {
+    return _LagerortSortKey(5, 0, 0, ort);
+  }
+  if (ortLower.contains('ktw')) return _LagerortSortKey(6, 0, 0, ort);
+
+  return _LagerortSortKey(7, 0, 0, ort);
 }
 
 /// Ein Artikel an einem Lagerort, aggregiert über alle offenen Bestellungen
