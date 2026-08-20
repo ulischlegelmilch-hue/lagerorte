@@ -1,6 +1,6 @@
 {
-    "name": "lagerorte",
-    "short_name": "lagerorte",
+    "name": "Lagerbuddy",
+    "short_name": "Lagerbuddy",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

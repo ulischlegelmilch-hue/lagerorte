@@ -90572,7 +90572,7 @@ else s.ac(new A.auh(s))},
 O(a){var s,r=this,q=null
 if(new A.e1(Date.now(),0,!1).xm($.aSG()))return B.Sx
 if(!r.d){s=r.f
-return A.aLF(B.hh,A.lD(new A.bN(B.hI,A.hd(A.b([B.Jz,B.UA,B.a_8,B.UB,A.fE(A.aMe(!0,r.e,A.aF0(q,new A.i_(4,A.ix(10),B.t),q,q,q,q,q,q,!0,q,q,q,q,q,s,B.bh,!0,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,B.jd,"Passwort",!0,!0,!1,q,q,q,q,q,q,q,q,q,q,q,q,q,q),!0,new A.aui(r),B.Cf),q,260),B.j2,A.fE(A.aJx(B.a_9,r.gafI(),A.aJy(q,q,B.b8,q,q,q,q,q,q,q,q,B.Ut,q,q,new A.dt(A.ix(10),B.t),q,q,q,q,q)),q,260)],t.p),B.a9,B.dZ,B.ai),q),q,q),q)}return B.Ss}}
+return A.aLF(B.hh,A.lD(new A.bN(B.hI,A.hd(A.b([B.Jz,B.UA,B.a_a,B.UB,A.fE(A.aMe(!0,r.e,A.aF0(q,new A.i_(4,A.ix(10),B.t),q,q,q,q,q,q,!0,q,q,q,q,q,s,B.bh,!0,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,B.jd,"Passwort",!0,!0,!1,q,q,q,q,q,q,q,q,q,q,q,q,q,q),!0,new A.aui(r),B.Cf),q,260),B.j2,A.fE(A.aJx(B.a_8,r.gafI(),A.aJy(q,q,B.b8,q,q,q,q,q,q,q,q,B.Ut,q,q,new A.dt(A.ix(10),B.t),q,q,q,q,q)),q,260)],t.p),B.a9,B.dZ,B.ai),q),q,q),q)}return B.Ss}}
 A.aug.prototype={
 $0(){var s=this.a
 s.d=!0
@@ -90896,7 +90896,7 @@ n.push(A.nJ(p,p,r,p,p,s?p:q.gabH(),p,p,"Bestellung (PDF) importieren"))
 n=A.b([A.aIm(n,!1,B.bh,B.a_d)],o)
 s=q.as
 if(s!=null)n.push(new A.bN(B.pg,A.cV(s,p,p,p,B.Ci,p,p),p))
-if(m.a===0)n.push(A.kv(A.lD(new A.bN(B.hI,A.hd(A.b([B.Jr,B.j2,B.a_a],o),B.a9,B.dZ,B.ai),p),p,p),1))
+if(m.a===0)n.push(A.kv(A.lD(new A.bN(B.hI,A.hd(A.b([B.Jr,B.j2,B.a_9],o),B.a9,B.dZ,B.ai),p),p,p),1))
 else{m=A.ci([q.at],t.S)
 s=A.aYO(B.bh,B.S,B.b8,B.k)
 B.b.J(n,A.b([new A.bN(B.Ii,new A.wj(B.Ll,m,new A.ayo(q),s,p,t.WE),p),A.kv(q.at===0?q.ac7():q.abY(),1)],o))}return A.hd(n,B.a9,B.a3,B.ai)},
@@ -114756,10 +114756,10 @@ B.Yt=new A.o(!0,B.cj,null,null,null,null,8,B.aS,null,0.6,null,null,null,null,nul
 B.a_4=new A.eH("AUS DEM SCHRANK",null,B.Yt,null,null,null,null,null,null)
 B.Ce=new A.o(!0,null,null,null,null,null,null,B.aS,null,1.5,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
 B.a_7=new A.eH("LAGERLISTE",null,B.Ce,null,null,null,null,null,null)
+B.a_8=new A.eH("ENTSPERREN",null,B.n8,null,null,null,null,null,null)
+B.a_9=new A.eH("Noch keine Bestellung importiert.\nOben rechts eine Bestellung (PDF) hochladen.",null,B.jd,B.dm,null,null,null,null,null)
 B.Z7=new A.o(!0,B.k,null,null,null,null,20,B.aS,null,1.5,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.a_8=new A.eH("LAGERORTE",null,B.Z7,null,null,null,null,null,null)
-B.a_9=new A.eH("ENTSPERREN",null,B.n8,null,null,null,null,null,null)
-B.a_a=new A.eH("Noch keine Bestellung importiert.\nOben rechts eine Bestellung (PDF) hochladen.",null,B.jd,B.dm,null,null,null,null,null)
+B.a_a=new A.eH("LAGERBUDDY",null,B.Z7,null,null,null,null,null,null)
 B.a_b=new A.eH("Noch keine Lagerliste importiert.\nOben rechts eine Inventurliste (PDF) hochladen.",null,B.jd,B.dm,null,null,null,null,null)
 B.a_c=new A.eH("ABBRECHEN",null,null,null,null,null,null,null,null)
 B.a_d=new A.eH("KOMMISSIONIEREN",null,B.Ce,null,null,null,null,null,null)
