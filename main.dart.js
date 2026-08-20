@@ -91550,7 +91550,7 @@ A.ar_.prototype={
 $1(a){return a.b.d},
 $S:560}
 A.OK.prototype={
-M(a){return new A.Cn(B.Jd,"Kommissionieren",A.x3(B.al,null,null).avz(B.G_,B.hq),!1,null)}}
+M(a){return new A.Cn(B.Jd,"Lagerbuddy",A.x3(B.al,null,null).avz(B.G_,B.hq),!1,null)}}
 A.Bt.prototype={
 aw(){return new A.Hq(new A.wZ(B.nb,$.av()))}}
 A.Hq.prototype={
