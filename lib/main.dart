@@ -149,7 +149,7 @@ class LagerorteApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Kommissionieren',
+      title: 'Lagerbuddy',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: _bg,
