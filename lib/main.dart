@@ -882,31 +882,36 @@ class _RootScreenState extends State<RootScreen> {
                       color: a.abgehakt ? Colors.white38 : Colors.white,
                       decoration: a.abgehakt ? TextDecoration.lineThrough : null)),
               const SizedBox(height: 8),
-              ...a.proWache.map((e) => GestureDetector(
-                    onLongPress: () => _toggleNichtVerfuegbar(e.value),
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                        if (e.value.nichtVerfuegbar)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 4),
-                            child: Icon(Icons.report, color: Colors.orange, size: 14),
-                          ),
-                        Text('${e.value.menge} ${e.value.einheit}',
+              ...a.proWache.map((e) => Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      Text('${e.value.menge} ${e.value.einheit}',
+                          style: TextStyle(
+                              color: e.value.nichtVerfuegbar ? Colors.orange : Colors.white60,
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              decoration: e.value.nichtVerfuegbar ? TextDecoration.lineThrough : null)),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text('RW ${e.key}',
                             style: TextStyle(
-                                color: e.value.nichtVerfuegbar ? Colors.orange : Colors.white60,
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                decoration: e.value.nichtVerfuegbar ? TextDecoration.lineThrough : null)),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text('RW ${e.key}',
-                              style: TextStyle(
-                                  color: e.value.nichtVerfuegbar ? Colors.orange : Colors.grey, fontSize: 13),
-                              overflow: TextOverflow.ellipsis),
+                                color: e.value.nichtVerfuegbar ? Colors.orange : Colors.grey, fontSize: 13),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      SizedBox(
+                        width: 26, height: 26,
+                        child: IconButton(
+                          padding: EdgeInsets.zero,
+                          iconSize: 15,
+                          icon: Icon(
+                            e.value.nichtVerfuegbar ? Icons.report : Icons.report_gmailerrorred_outlined,
+                            color: e.value.nichtVerfuegbar ? Colors.orange : Colors.white24,
+                          ),
+                          tooltip: 'Für RW ${e.key} als nicht verfügbar markieren',
+                          onPressed: () => _toggleNichtVerfuegbar(e.value),
                         ),
-                      ]),
-                    ),
+                      ),
+                    ]),
                   )),
             ]),
           ),
