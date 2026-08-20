@@ -164,7 +164,7 @@ class _GateScreenState extends State<GateScreen> {
             child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
               const Icon(Icons.lock_outline, size: 60, color: _red),
               const SizedBox(height: 20),
-              const Text('LAGERORTE',
+              const Text('LAGERBUDDY',
                   style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20, letterSpacing: 1.5)),
               const SizedBox(height: 24),
               SizedBox(
