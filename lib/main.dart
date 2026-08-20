@@ -287,6 +287,7 @@ class _RootScreenState extends State<RootScreen> {
   String? _bestellFehler;
   int _kommAnsicht = 0; // 0 = Sammelliste, 1 = Je Wache
   String? _ausgewaehlteWache;
+  int _lagerlisteSortierung = 0; // 0 = nach Artikel, 1 = nach Lagerort
 
   @override
   void initState() {
@@ -449,7 +450,15 @@ class _RootScreenState extends State<RootScreen> {
     final gefiltert = q.isEmpty
         ? List<ArtikelOrt>.from(liste)
         : liste.where((a) => a.name.toLowerCase().contains(q)).toList();
-    gefiltert.sort((a, b) => _artikelVergleich(a.name, b.name));
+    if (_lagerlisteSortierung == 1) {
+      gefiltert.sort((a, b) {
+        final ortVergleich = _lagerortSortKey(a.lagerort).compareTo(_lagerortSortKey(b.lagerort));
+        if (ortVergleich != 0) return ortVergleich;
+        return _artikelVergleich(a.name, b.name);
+      });
+    } else {
+      gefiltert.sort((a, b) => _artikelVergleich(a.name, b.name));
+    }
     return gefiltert;
   }
 
@@ -1141,38 +1150,81 @@ class _RootScreenState extends State<RootScreen> {
             ),
           ),
         ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(value: 0, label: Text('NACH ARTIKEL'), icon: Icon(Icons.sort_by_alpha)),
+              ButtonSegment(value: 1, label: Text('NACH LAGERORT'), icon: Icon(Icons.location_on_outlined)),
+            ],
+            selected: {_lagerlisteSortierung},
+            onSelectionChanged: (s) => setState(() => _lagerlisteSortierung = s.first),
+            style: SegmentedButton.styleFrom(
+              backgroundColor: _card,
+              foregroundColor: Colors.white70,
+              selectedBackgroundColor: _red,
+              selectedForegroundColor: Colors.white,
+            ),
+          ),
+        ),
         Expanded(
           child: ergebnisse.isEmpty
               ? const Center(child: Text('Kein Artikel gefunden', style: TextStyle(color: Colors.grey)))
-              : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
-                  itemCount: ergebnisse.length,
-                  itemBuilder: (_, i) {
-                    final item = ergebnisse[i];
-                    return Container(
-                      margin: const EdgeInsets.symmetric(vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _card,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.white10),
-                      ),
-                      child: ListTile(
-                        title: Text(item.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                        trailing: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: _red.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: _red.withValues(alpha: 0.5)),
-                          ),
-                          child: Text(item.lagerort, style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
-                        ),
-                      ),
-                    );
-                  },
-                ),
+              : _lagerlisteSortierung == 1
+                  ? _buildLagerlisteNachOrt(ergebnisse)
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+                      itemCount: ergebnisse.length,
+                      itemBuilder: (_, i) => _buildArtikelKarte(ergebnisse[i]),
+                    ),
         ),
       ],
     ]);
+  }
+
+  Widget _buildArtikelKarte(ArtikelOrt item) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: ListTile(
+        title: Text(item.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: _red.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: _red.withValues(alpha: 0.5)),
+          ),
+          child: Text(item.lagerort, style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
+        ),
+      ),
+    );
+  }
+
+  /// Artikel gruppiert nach Lagerort (mit Location-Header), Lagerorte in
+  /// derselben Reihenfolge wie beim Kommissionieren, Artikel je Lagerort
+  /// natürlich sortiert.
+  Widget _buildLagerlisteNachOrt(List<ArtikelOrt> ergebnisse) {
+    final byOrt = <String, List<ArtikelOrt>>{};
+    for (final a in ergebnisse) {
+      byOrt.putIfAbsent(a.lagerort, () => []).add(a);
+    }
+    final keys = byOrt.keys.toList()
+      ..sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b)));
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+      children: keys.map((ort) {
+        final items = byOrt[ort]!;
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _buildLocationHeader(ort),
+          ...items.map(_buildArtikelKarte),
+        ]);
+      }).toList(),
+    );
   }
 }
