@@ -547,7 +547,10 @@ class _RootScreenState extends State<RootScreen> {
   }
 
   Future<void> _toggleAbgehakt(BestellPosition pos) async {
-    setState(() => pos.abgehakt = !pos.abgehakt);
+    setState(() {
+      pos.abgehakt = !pos.abgehakt;
+      if (pos.abgehakt) pos.nichtVerfuegbar = false;
+    });
     await _bestellungenSpeichern();
   }
 
@@ -558,9 +561,106 @@ class _RootScreenState extends State<RootScreen> {
     setState(() {
       for (final p in gruppe) {
         p.abgehakt = neuerStatus;
+        if (neuerStatus) p.nichtVerfuegbar = false;
       }
     });
     await _bestellungenSpeichern();
+  }
+
+  /// Markiert eine einzelne Position (für eine Wache) als nicht verfügbar
+  /// bzw. hebt diese Markierung wieder auf. Schließt sich mit "erledigt" aus.
+  Future<void> _toggleNichtVerfuegbar(BestellPosition pos) async {
+    setState(() {
+      pos.nichtVerfuegbar = !pos.nichtVerfuegbar;
+      if (pos.nichtVerfuegbar) pos.abgehakt = false;
+    });
+    await _bestellungenSpeichern();
+  }
+
+  /// Alle Positionen aller offenen Bestellungen, die als "nicht verfügbar"
+  /// markiert wurden, gruppiert nach Wache.
+  Map<String, List<BestellPosition>> _nichtVerfuegbarNachWache() {
+    final result = <String, List<BestellPosition>>{};
+    for (final entry in _bestellungen.entries) {
+      final betroffen = entry.value.positionen.where((p) => p.nichtVerfuegbar).toList()
+        ..sort((a, b) => _artikelVergleich(a.name, b.name));
+      if (betroffen.isNotEmpty) result[entry.key] = betroffen;
+    }
+    return result;
+  }
+
+  void _nichtVerfuegbarAnzeigen() {
+    final byWache = _nichtVerfuegbarNachWache();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (ctx, scrollController) => Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+            child: Row(children: [
+              const Icon(Icons.report_gmailerrorred_outlined, color: Colors.orange, size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('NICHT BEREITGESTELLTE ARTIKEL',
+                    style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0, color: Colors.white)),
+              ),
+              IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => Navigator.pop(ctx)),
+            ]),
+          ),
+          Expanded(
+            child: byWache.isEmpty
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('Bisher wurde nichts als nicht verfügbar markiert.',
+                          textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                    ),
+                  )
+                : ListView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                    children: byWache.entries.map((entry) {
+                      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12, bottom: 6),
+                          child: Text('RW ${entry.key}',
+                              style: const TextStyle(color: _red, fontWeight: FontWeight.bold, letterSpacing: 0.6)),
+                        ),
+                        ...entry.value.map((pos) => Container(
+                              margin: const EdgeInsets.symmetric(vertical: 3),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
+                              ),
+                              child: Row(children: [
+                                Expanded(
+                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text(pos.name,
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                                    Text(_lagerortFuer(pos) ?? 'Lagerort unbekannt',
+                                        style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                                  ]),
+                                ),
+                                Text('${pos.menge} ${pos.einheit}',
+                                    style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
+                              ]),
+                            )),
+                      ]);
+                    }).toList(),
+                  ),
+          ),
+        ]),
+      ),
+    );
   }
 
   List<_AggregatEintrag> _buildAggregat() {
@@ -618,6 +718,12 @@ class _RootScreenState extends State<RootScreen> {
         automaticallyImplyLeading: false,
         title: const Text('KOMMISSIONIEREN', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
         actions: [
+          if (_bestellungen.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.report_gmailerrorred_outlined),
+              tooltip: 'Nicht bereitgestellte Artikel anzeigen',
+              onPressed: _nichtVerfuegbarAnzeigen,
+            ),
           if (_bestellungen.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined),
@@ -776,18 +882,31 @@ class _RootScreenState extends State<RootScreen> {
                       color: a.abgehakt ? Colors.white38 : Colors.white,
                       decoration: a.abgehakt ? TextDecoration.lineThrough : null)),
               const SizedBox(height: 8),
-              ...a.proWache.map((e) => Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                      Text('${e.value.menge} ${e.value.einheit}',
-                          style: const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.bold)),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text('RW ${e.key}',
-                            style: const TextStyle(color: Colors.grey, fontSize: 13),
-                            overflow: TextOverflow.ellipsis),
-                      ),
-                    ]),
+              ...a.proWache.map((e) => GestureDetector(
+                    onLongPress: () => _toggleNichtVerfuegbar(e.value),
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                        if (e.value.nichtVerfuegbar)
+                          const Padding(
+                            padding: EdgeInsets.only(right: 4),
+                            child: Icon(Icons.report, color: Colors.orange, size: 14),
+                          ),
+                        Text('${e.value.menge} ${e.value.einheit}',
+                            style: TextStyle(
+                                color: e.value.nichtVerfuegbar ? Colors.orange : Colors.white60,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                decoration: e.value.nichtVerfuegbar ? TextDecoration.lineThrough : null)),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text('RW ${e.key}',
+                              style: TextStyle(
+                                  color: e.value.nichtVerfuegbar ? Colors.orange : Colors.grey, fontSize: 13),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                      ]),
+                    ),
                   )),
             ]),
           ),
@@ -883,9 +1002,13 @@ class _RootScreenState extends State<RootScreen> {
               ...items.map((pos) => Container(
                     margin: const EdgeInsets.symmetric(vertical: 3),
                     decoration: BoxDecoration(
-                      color: pos.abgehakt ? Colors.green.withValues(alpha: 0.08) : _card,
+                      color: pos.nichtVerfuegbar
+                          ? Colors.orange.withValues(alpha: 0.08)
+                          : (pos.abgehakt ? Colors.green.withValues(alpha: 0.08) : _card),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: pos.abgehakt ? Colors.green.withValues(alpha: 0.4) : Colors.white10),
+                      border: Border.all(color: pos.nichtVerfuegbar
+                          ? Colors.orange.withValues(alpha: 0.4)
+                          : (pos.abgehakt ? Colors.green.withValues(alpha: 0.4) : Colors.white10)),
                     ),
                     child: CheckboxListTile(
                       value: pos.abgehakt,
@@ -894,11 +1017,24 @@ class _RootScreenState extends State<RootScreen> {
                       controlAffinity: ListTileControlAffinity.leading,
                       title: Text(pos.name,
                           style: TextStyle(
-                              color: pos.abgehakt ? Colors.white38 : Colors.white,
-                              decoration: pos.abgehakt ? TextDecoration.lineThrough : null,
+                              color: pos.nichtVerfuegbar
+                                  ? Colors.orange
+                                  : (pos.abgehakt ? Colors.white38 : Colors.white),
+                              decoration: (pos.abgehakt || pos.nichtVerfuegbar) ? TextDecoration.lineThrough : null,
                               fontWeight: FontWeight.w600)),
-                      subtitle: Text('${pos.menge} ${pos.einheit}',
-                          style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                      subtitle: Text(
+                          pos.nichtVerfuegbar
+                              ? '${pos.menge} ${pos.einheit} · nicht verfügbar'
+                              : '${pos.menge} ${pos.einheit}',
+                          style: TextStyle(color: pos.nichtVerfuegbar ? Colors.orange : Colors.grey, fontSize: 12)),
+                      secondary: IconButton(
+                        icon: Icon(
+                          pos.nichtVerfuegbar ? Icons.report : Icons.report_gmailerrorred_outlined,
+                          color: pos.nichtVerfuegbar ? Colors.orange : Colors.white24,
+                        ),
+                        tooltip: 'Als nicht verfügbar markieren',
+                        onPressed: () => _toggleNichtVerfuegbar(pos),
+                      ),
                     ),
                   )),
             ]);

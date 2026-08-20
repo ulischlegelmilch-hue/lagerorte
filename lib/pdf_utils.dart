@@ -114,10 +114,12 @@ class BestellPosition {
   final int menge;
   final String einheit;
   bool abgehakt;
-  BestellPosition(this.name, this.menge, this.einheit, {this.abgehakt = false});
-  Map<String, dynamic> toJson() => {'n': name, 'm': menge, 'e': einheit, 'a': abgehakt};
+  bool nichtVerfuegbar;
+  BestellPosition(this.name, this.menge, this.einheit, {this.abgehakt = false, this.nichtVerfuegbar = false});
+  Map<String, dynamic> toJson() => {'n': name, 'm': menge, 'e': einheit, 'a': abgehakt, 'nv': nichtVerfuegbar};
   factory BestellPosition.fromJson(Map<String, dynamic> j) => BestellPosition(
-      j['n'] as String, j['m'] as int, j['e'] as String, abgehakt: j['a'] as bool? ?? false);
+      j['n'] as String, j['m'] as int, j['e'] as String,
+      abgehakt: j['a'] as bool? ?? false, nichtVerfuegbar: j['nv'] as bool? ?? false);
 }
 
 class Bestellung {
