@@ -81,6 +81,46 @@ _LagerortSortKey _lagerortSortKey(String ort) {
   return _LagerortSortKey(7, 0, 0, ort);
 }
 
+/// Buchstaben-Größen in ihrer logischen (nicht alphabetischen) Reihenfolge,
+/// damit z.B. "Größe S" vor "Größe M" vor "Größe L" einsortiert wird statt
+/// alphabetisch (L, M, S, XL, XS).
+const _groessenReihenfolge = {'xxs': 0, 'xs': 1, 's': 2, 'm': 3, 'l': 4, 'xl': 5, 'xxl': 6};
+
+final _artikelTokenRe = RegExp(r'\d+(?:[.,]\d+)?|[A-Za-zÄÖÜäöüß]+');
+
+/// Vergleicht zwei Artikelnamen "natürlich": gleiche Wörter (der Oberbegriff,
+/// z.B. "Flexülen" oder "Guedeltubus") werden gleich behandelt, die
+/// unterschiedliche Zahl bzw. Größenangabe (der Unterbegriff, z.B. "G14" vs.
+/// "G22" oder "Größe S" vs. "Größe M") aber numerisch bzw. nach Größen-
+/// Reihenfolge statt alphabetisch verglichen. So landen z.B. Flexülen G14
+/// vor G16 vor G18 statt alphabetisch G14, G16, G18, G20, G22 (zufällig
+/// gleich) bzw. Handschuhe XS vor S vor M vor L vor XL statt alphabetisch
+/// L, M, S, XL, XS. Der volle Artikelname bleibt für die Anzeige unverändert
+/// ausgeschrieben, nur die Sortierung nutzt diese Tokens.
+int _artikelVergleich(String a, String b) {
+  final ta = _artikelTokenRe.allMatches(a).map((m) => m.group(0)!).toList();
+  final tb = _artikelTokenRe.allMatches(b).map((m) => m.group(0)!).toList();
+  final len = ta.length < tb.length ? ta.length : tb.length;
+  for (var i = 0; i < len; i++) {
+    final xa = ta[i], xb = tb[i];
+    final na = num.tryParse(xa.replaceAll(',', '.'));
+    final nb = num.tryParse(xb.replaceAll(',', '.'));
+    if (na != null && nb != null) {
+      if (na != nb) return na.compareTo(nb);
+      continue;
+    }
+    final ga = _groessenReihenfolge[xa.toLowerCase()];
+    final gb = _groessenReihenfolge[xb.toLowerCase()];
+    if (ga != null && gb != null) {
+      if (ga != gb) return ga.compareTo(gb);
+      continue;
+    }
+    final c = xa.toLowerCase().compareTo(xb.toLowerCase());
+    if (c != 0) return c;
+  }
+  return ta.length.compareTo(tb.length);
+}
+
 /// Ein Artikel an einem Lagerort, aggregiert über alle offenen Bestellungen
 /// hinweg: wie viel insgesamt aus dem Fach zu nehmen ist, aufgeschlüsselt
 /// danach, wie viel davon an welche Wache geht.
@@ -409,7 +449,7 @@ class _RootScreenState extends State<RootScreen> {
     final gefiltert = q.isEmpty
         ? List<ArtikelOrt>.from(liste)
         : liste.where((a) => a.name.toLowerCase().contains(q)).toList();
-    gefiltert.sort((a, b) => a.name.compareTo(b.name));
+    gefiltert.sort((a, b) => _artikelVergleich(a.name, b.name));
     return gefiltert;
   }
 
@@ -533,7 +573,7 @@ class _RootScreenState extends State<RootScreen> {
         byKey.putIfAbsent(key, () => _AggregatEintrag(pos.name, ort, [])).proWache.add(MapEntry(wache, pos));
       }
     }
-    final list = byKey.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+    final list = byKey.values.toList()..sort((a, b) => _artikelVergleich(a.name, b.name));
     return list;
   }
 
@@ -797,7 +837,8 @@ class _RootScreenState extends State<RootScreen> {
     final erledigt = bestellung.positionen.where((p) => p.abgehakt).length;
 
     final byOrt = <String, List<BestellPosition>>{};
-    final sortiert = List<BestellPosition>.from(bestellung.positionen)..sort((a, b) => a.name.compareTo(b.name));
+    final sortiert = List<BestellPosition>.from(bestellung.positionen)
+      ..sort((a, b) => _artikelVergleich(a.name, b.name));
     for (final pos in sortiert) {
       final ort = _lagerortFuer(pos) ?? 'Lagerort unbekannt';
       byOrt.putIfAbsent(ort, () => []).add(pos);
