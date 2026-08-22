@@ -125,8 +125,9 @@ class BestellPosition {
 class Bestellung {
   final String? bestellNr;
   final String? wache;
+  final DateTime? erstelltAm;
   final List<BestellPosition> positionen;
-  Bestellung({this.bestellNr, this.wache, required this.positionen});
+  Bestellung({this.bestellNr, this.wache, this.erstelltAm, required this.positionen});
 }
 
 /// Baut aus dem "Bestellung"-PDF (Spalten: Pos., Bezeichnung, Artikel-Nr.,
@@ -136,6 +137,10 @@ class Bestellung {
 /// verworfen.
 Bestellung parseBestellung(String text, List<String> bekannteWachen) {
   final nrMatch = RegExp(r'Bestellung\s+(\d{8}-\d+)').firstMatch(text);
+  final erstelltMatch = RegExp(r'Dokument erstellt am:\s*(\d{2})\.(\d{2})\.(\d{4})').firstMatch(text);
+  final erstelltAm = erstelltMatch == null
+      ? null
+      : DateTime(int.parse(erstelltMatch.group(3)!), int.parse(erstelltMatch.group(2)!), int.parse(erstelltMatch.group(1)!));
   String? wache;
   for (final w in bekannteWachen) {
     if (RegExp('Au[ßss]enlager\\s+$w', caseSensitive: false).hasMatch(text)) {
@@ -146,7 +151,9 @@ Bestellung parseBestellung(String text, List<String> bekannteWachen) {
 
   final lines = text.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
   final headerIdx = lines.indexOf('Pos.');
-  if (headerIdx < 0) return Bestellung(bestellNr: nrMatch?.group(1), wache: wache, positionen: []);
+  if (headerIdx < 0) {
+    return Bestellung(bestellNr: nrMatch?.group(1), wache: wache, erstelltAm: erstelltAm, positionen: []);
+  }
 
   final posRe = RegExp(r'^\d{1,3}$');
   final nrRe = RegExp(r'^\d{4,7}$');
@@ -194,5 +201,5 @@ Bestellung parseBestellung(String text, List<String> bekannteWachen) {
     }
   }
   flush();
-  return Bestellung(bestellNr: nrMatch?.group(1), wache: wache, positionen: items);
+  return Bestellung(bestellNr: nrMatch?.group(1), wache: wache, erstelltAm: erstelltAm, positionen: items);
 }

@@ -322,7 +322,11 @@ class _RootScreenState extends State<RootScreen> {
         final positionen = (m['positionen'] as List)
             .map((e) => BestellPosition.fromJson(e as Map<String, dynamic>))
             .toList();
-        _bestellungen[wache] = Bestellung(bestellNr: m['nr'] as String?, wache: wache, positionen: positionen);
+        _bestellungen[wache] = Bestellung(
+            bestellNr: m['nr'] as String?,
+            wache: wache,
+            erstelltAm: m['erstellt'] != null ? DateTime.tryParse(m['erstellt'] as String) : null,
+            positionen: positionen);
       });
       setState(() => _ausgewaehlteWache = _bestellungen.keys.isNotEmpty ? _bestellungen.keys.first : null);
     }
@@ -335,14 +339,18 @@ class _RootScreenState extends State<RootScreen> {
   Future<void> _bestellungenVonDbLaden() async {
     setState(() => _isSyncingBestellungen = true);
     try {
-      final rows = await _db.from('bestellungen').select('wache, bestell_nr, positionen');
+      final rows = await _db.from('bestellungen').select('wache, bestell_nr, erstellt_am, positionen');
       final Map<String, Bestellung> geladen = {};
       for (final row in rows as List) {
         final wache = row['wache'] as String;
         final positionen = (row['positionen'] as List)
             .map((e) => BestellPosition.fromJson(e as Map<String, dynamic>))
             .toList();
-        geladen[wache] = Bestellung(bestellNr: row['bestell_nr'] as String?, wache: wache, positionen: positionen);
+        geladen[wache] = Bestellung(
+            bestellNr: row['bestell_nr'] as String?,
+            wache: wache,
+            erstelltAm: row['erstellt_am'] != null ? DateTime.tryParse(row['erstellt_am'] as String) : null,
+            positionen: positionen);
       }
       if (geladen.isNotEmpty || _bestellungen.isEmpty) {
         setState(() {
@@ -407,6 +415,7 @@ class _RootScreenState extends State<RootScreen> {
     }
     final encoded = jsonEncode(_bestellungen.map((wache, b) => MapEntry(wache, {
           'nr': b.bestellNr,
+          'erstellt': b.erstelltAm?.toIso8601String(),
           'positionen': b.positionen.map((e) => e.toJson()).toList(),
         })));
     await prefs.setString('bestellungen', encoded);
@@ -425,6 +434,7 @@ class _RootScreenState extends State<RootScreen> {
           .map((e) => {
                 'wache': e.key,
                 'bestell_nr': e.value.bestellNr,
+                'erstellt_am': e.value.erstelltAm?.toIso8601String(),
                 'positionen': e.value.positionen.map((p) => p.toJson()).toList(),
               })
           .toList());
@@ -521,6 +531,10 @@ class _RootScreenState extends State<RootScreen> {
 
   // ---------------- Bestellung-Import / Kommissionieren ----------------
 
+  /// Formatiert ein Datum wie im PDF-Fußzeilenfeld "Dokument erstellt am".
+  String _datumKurz(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}';
+
   /// Eine Bestellung gilt als abgeschlossen, wenn jede Position entweder
   /// abgehakt oder als nicht verfügbar markiert wurde (beides = "erledigt").
   bool _istAbgeschlossen(Bestellung b) =>
@@ -560,8 +574,17 @@ class _RootScreenState extends State<RootScreen> {
   /// vor dem Überschreiben nachgefragt.
   Future<void> _bestellungPdfImportieren() async {
     setState(() => _bestellFehler = null);
-    final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
-    if (result.isEmpty) return;
+    List<PlatformFile> result;
+    try {
+      result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
+    } catch (e) {
+      setState(() => _bestellFehler = 'Dateiauswahl fehlgeschlagen: $e');
+      return;
+    }
+    if (result.isEmpty) {
+      setState(() => _bestellFehler = 'Es wurde keine Datei ausgewählt.');
+      return;
+    }
 
     setState(() => _isParsingBestellung = true);
     final erfolgreich = <String>[];
@@ -588,9 +611,10 @@ class _RootScreenState extends State<RootScreen> {
           if (bestehend != null) {
             final abgeschlossen = _istAbgeschlossen(bestehend);
             if (bestehend.bestellNr != null && bestehend.bestellNr == bestellung.bestellNr && abgeschlossen) {
+              final datum = bestellung.erstelltAm != null ? ' (erstellt am ${_datumKurz(bestellung.erstelltAm!)})' : '';
               final weiter = await _importKonfliktBestaetigen(
                 titel: 'BEREITS BEARBEITET',
-                inhalt: 'Die Bestellung ${bestellung.bestellNr} für $wache wurde bereits vollständig '
+                inhalt: 'Die Bestellung ${bestellung.bestellNr}$datum für $wache wurde bereits vollständig '
                     'bearbeitet. Trotzdem erneut importieren?',
               );
               if (!weiter) {
@@ -599,11 +623,13 @@ class _RootScreenState extends State<RootScreen> {
               }
             } else if (bestehend.bestellNr != bestellung.bestellNr && !abgeschlossen) {
               final erledigt = bestehend.positionen.where((p) => p.abgehakt || p.nichtVerfuegbar).length;
+              final altDatum = bestehend.erstelltAm != null ? ' (erstellt am ${_datumKurz(bestehend.erstelltAm!)})' : '';
+              final neuDatum = bestellung.erstelltAm != null ? ' (erstellt am ${_datumKurz(bestellung.erstelltAm!)})' : '';
               final weiter = await _importKonfliktBestaetigen(
                 titel: 'OFFENE BESTELLUNG VORHANDEN',
-                inhalt: 'Für $wache ist noch eine offene Bestellung (${bestehend.bestellNr ?? "ohne Nr."}, '
+                inhalt: 'Für $wache ist noch eine offene Bestellung (${bestehend.bestellNr ?? "ohne Nr."}$altDatum, '
                     '$erledigt/${bestehend.positionen.length} erledigt) vorhanden. Durch die neue Bestellung '
-                    '(${bestellung.bestellNr ?? "ohne Nr."}) ersetzen? Der bisherige Fortschritt geht verloren.',
+                    '(${bestellung.bestellNr ?? "ohne Nr."}$neuDatum) ersetzen? Der bisherige Fortschritt geht verloren.',
               );
               if (!weiter) {
                 fehler.add('${picked.name}: Import übersprungen (offene Bestellung vorhanden)');
@@ -638,6 +664,8 @@ class _RootScreenState extends State<RootScreen> {
       if (fehler.isNotEmpty) {
         setState(() => _bestellFehler = fehler.join('\n'));
       }
+    } catch (e) {
+      if (mounted) setState(() => _bestellFehler = 'Import fehlgeschlagen: $e');
     } finally {
       if (mounted) setState(() => _isParsingBestellung = false);
     }
@@ -955,10 +983,14 @@ class _RootScreenState extends State<RootScreen> {
                 color: _bestellungen.containsKey(w) ? Colors.green : Colors.white38,
                 size: 16,
               ),
-              label: Text(w, style: TextStyle(
-                  color: _bestellungen.containsKey(w) ? Colors.white : Colors.white38,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600)),
+              label: Text(
+                  _bestellungen[w]?.erstelltAm != null
+                      ? '$w (${_datumKurz(_bestellungen[w]!.erstelltAm!)})'
+                      : w,
+                  style: TextStyle(
+                      color: _bestellungen.containsKey(w) ? Colors.white : Colors.white38,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
               backgroundColor: _bestellungen.containsKey(w) ? Colors.green.withValues(alpha: 0.12) : _card,
               side: BorderSide(color: _bestellungen.containsKey(w) ? Colors.green.withValues(alpha: 0.4) : Colors.white10),
               visualDensity: VisualDensity.compact,
@@ -1185,10 +1217,15 @@ class _RootScreenState extends State<RootScreen> {
           ),
         ]),
       ),
-      if (bestellung.bestellNr != null)
+      if (bestellung.bestellNr != null || bestellung.erstelltAm != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-          child: Text('Bestellung ${bestellung.bestellNr}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          child: Text(
+              [
+                if (bestellung.bestellNr != null) 'Bestellung ${bestellung.bestellNr}',
+                if (bestellung.erstelltAm != null) 'erstellt am ${_datumKurz(bestellung.erstelltAm!)}',
+              ].join(' · '),
+              style: const TextStyle(color: Colors.grey, fontSize: 12)),
         ),
       _buildLagerlisteWarnung(),
       Expanded(
