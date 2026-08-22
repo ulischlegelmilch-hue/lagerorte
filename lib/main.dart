@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
+import 'package:file_picker_web/file_picker_web.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -448,7 +449,15 @@ class _RootScreenState extends State<RootScreen> {
 
   Future<void> _lagerPdfImportieren() async {
     setState(() => _lagerFehler = null);
-    final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
+    final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+        // Default-Verhalten des Web-Plugins bricht die Auswahl automatisch ab,
+        // wenn das Browserfenster kurz den Fokus verliert - passiert auf
+        // iOS/Safari beim systemeigenen Dateiauswahl-Sheet regelmäßig und
+        // führt sonst zu einem leeren Ergebnis trotz echter Auswahl.
+        webOptions: const FilePickerWebOptions(cancelUploadOnWindowBlur: false),
+      );
     if (result.isEmpty) return;
     final picked = result.first;
 
@@ -576,7 +585,15 @@ class _RootScreenState extends State<RootScreen> {
     setState(() => _bestellFehler = null);
     List<PlatformFile> result;
     try {
-      result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
+      result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+        // Default-Verhalten des Web-Plugins bricht die Auswahl automatisch ab,
+        // wenn das Browserfenster kurz den Fokus verliert - passiert auf
+        // iOS/Safari beim systemeigenen Dateiauswahl-Sheet regelmäßig und
+        // führt sonst zu einem leeren Ergebnis trotz echter Auswahl.
+        webOptions: const FilePickerWebOptions(cancelUploadOnWindowBlur: false),
+      );
     } catch (e) {
       setState(() => _bestellFehler = 'Dateiauswahl fehlgeschlagen: $e');
       return;
