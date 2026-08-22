@@ -284,6 +284,7 @@ class _RootScreenState extends State<RootScreen> {
   // --- Kommissionieren ---
   final Map<String, Bestellung> _bestellungen = {}; // Key: Wache
   bool _isParsingBestellung = false;
+  bool _isSyncingBestellungen = false;
   String? _bestellFehler;
   int _kommAnsicht = 0; // 0 = Sammelliste, 1 = Je Wache
   String? _ausgewaehlteWache;
@@ -325,6 +326,40 @@ class _RootScreenState extends State<RootScreen> {
       });
       setState(() => _ausgewaehlteWache = _bestellungen.keys.isNotEmpty ? _bestellungen.keys.first : null);
     }
+    await _bestellungenVonDbLaden();
+  }
+
+  /// Lädt die Bestellungen aller Wachen aus der geteilten Datenbank (falls
+  /// erreichbar) und ersetzt damit den lokalen Stand, damit ein auf einem
+  /// anderen Gerät (z.B. Handy) importierte Bestellung auch hier erscheint.
+  Future<void> _bestellungenVonDbLaden() async {
+    setState(() => _isSyncingBestellungen = true);
+    try {
+      final rows = await _db.from('bestellungen').select('wache, bestell_nr, positionen');
+      final Map<String, Bestellung> geladen = {};
+      for (final row in rows as List) {
+        final wache = row['wache'] as String;
+        final positionen = (row['positionen'] as List)
+            .map((e) => BestellPosition.fromJson(e as Map<String, dynamic>))
+            .toList();
+        geladen[wache] = Bestellung(bestellNr: row['bestell_nr'] as String?, wache: wache, positionen: positionen);
+      }
+      if (geladen.isNotEmpty || _bestellungen.isEmpty) {
+        setState(() {
+          _bestellungen
+            ..clear()
+            ..addAll(geladen);
+          if (_ausgewaehlteWache == null || !_bestellungen.containsKey(_ausgewaehlteWache)) {
+            _ausgewaehlteWache = _bestellungen.keys.isNotEmpty ? _bestellungen.keys.first : null;
+          }
+        });
+        await _bestellungenLokalSpeichern();
+      }
+    } catch (_) {
+      // offline oder DB nicht erreichbar -> lokaler Cache bleibt bestehen
+    } finally {
+      if (mounted) setState(() => _isSyncingBestellungen = false);
+    }
   }
 
   /// Lädt die Lagerlisten aller Lager aus der geteilten Datenbank (falls
@@ -364,7 +399,7 @@ class _RootScreenState extends State<RootScreen> {
     await prefs.setString('lager_daten', encoded);
   }
 
-  Future<void> _bestellungenSpeichern() async {
+  Future<void> _bestellungenLokalSpeichern() async {
     final prefs = await SharedPreferences.getInstance();
     if (_bestellungen.isEmpty) {
       await prefs.remove('bestellungen');
@@ -375,6 +410,28 @@ class _RootScreenState extends State<RootScreen> {
           'positionen': b.positionen.map((e) => e.toJson()).toList(),
         })));
     await prefs.setString('bestellungen', encoded);
+  }
+
+  /// Speichert lokal (sofort verfügbar, auch offline) UND schreibt die
+  /// aktuellen Bestellungen in die geteilte Datenbank, damit sie auf allen
+  /// Geräten sichtbar werden (z.B. Import per Handy -> sichtbar auf dem
+  /// Lager-Tablet). Entfernen einzelner/aller Bestellungen räumt die DB
+  /// separat auf (siehe _bestellungEntfernen / _allesLeerenBestaetigen).
+  Future<void> _bestellungenSpeichern() async {
+    await _bestellungenLokalSpeichern();
+    if (_bestellungen.isEmpty) return;
+    try {
+      await _db.from('bestellungen').upsert(_bestellungen.entries
+          .map((e) => {
+                'wache': e.key,
+                'bestell_nr': e.value.bestellNr,
+                'positionen': e.value.positionen.map((p) => p.toJson()).toList(),
+              })
+          .toList());
+    } catch (_) {
+      // offline oder DB nicht erreichbar -> lokaler Cache bleibt bestehen,
+      // naechster erfolgreicher Speichervorgang holt den Stand nach
+    }
   }
 
   // ---------------- Lagerliste-Import ----------------
@@ -464,9 +521,43 @@ class _RootScreenState extends State<RootScreen> {
 
   // ---------------- Bestellung-Import / Kommissionieren ----------------
 
+  /// Eine Bestellung gilt als abgeschlossen, wenn jede Position entweder
+  /// abgehakt oder als nicht verfügbar markiert wurde (beides = "erledigt").
+  bool _istAbgeschlossen(Bestellung b) =>
+      b.positionen.isNotEmpty && b.positionen.every((p) => p.abgehakt || p.nichtVerfuegbar);
+
+  /// Bestätigungsdialog für Konfliktfälle beim Bestellungs-Import (siehe
+  /// _bestellungPdfImportieren). Gibt true zurück, wenn trotzdem importiert
+  /// werden soll.
+  Future<bool> _importKonfliktBestaetigen({required String titel, required String inhalt}) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(titel, style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(inhalt),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ABBRECHEN')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: _red),
+            child: const Text('TROTZDEM IMPORTIEREN', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   /// Erlaubt die Auswahl mehrerer Bestellungs-PDFs auf einmal (z.B. alle
   /// Außenlager einer Lieferung in einem Rutsch importieren). Jede PDF wird
   /// einzeln geparst; eine fehlerhafte Datei blockiert die anderen nicht.
+  /// Vor dem Import wird erst der aktuelle Datenbankstand geholt (damit ein
+  /// Import auf einem anderen Gerät erkannt wird) und geprüft, ob für die
+  /// Wache schon eine (a) identische, bereits abgeschlossene Bestellung oder
+  /// (b) eine andere, noch offene Bestellung vorliegt - in beiden Fällen wird
+  /// vor dem Überschreiben nachgefragt.
   Future<void> _bestellungPdfImportieren() async {
     setState(() => _bestellFehler = null);
     final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
@@ -476,6 +567,7 @@ class _RootScreenState extends State<RootScreen> {
     final erfolgreich = <String>[];
     final fehler = <String>[];
     try {
+      await _bestellungenVonDbLaden();
       for (final picked in result) {
         try {
           final bytes = await picked.readAsBytes();
@@ -491,6 +583,35 @@ class _RootScreenState extends State<RootScreen> {
             fehler.add('${picked.name}: Wache nicht erkannt');
             continue;
           }
+
+          final bestehend = _bestellungen[wache];
+          if (bestehend != null) {
+            final abgeschlossen = _istAbgeschlossen(bestehend);
+            if (bestehend.bestellNr != null && bestehend.bestellNr == bestellung.bestellNr && abgeschlossen) {
+              final weiter = await _importKonfliktBestaetigen(
+                titel: 'BEREITS BEARBEITET',
+                inhalt: 'Die Bestellung ${bestellung.bestellNr} für $wache wurde bereits vollständig '
+                    'bearbeitet. Trotzdem erneut importieren?',
+              );
+              if (!weiter) {
+                fehler.add('${picked.name}: Bestellung bereits bearbeitet - übersprungen');
+                continue;
+              }
+            } else if (bestehend.bestellNr != bestellung.bestellNr && !abgeschlossen) {
+              final erledigt = bestehend.positionen.where((p) => p.abgehakt || p.nichtVerfuegbar).length;
+              final weiter = await _importKonfliktBestaetigen(
+                titel: 'OFFENE BESTELLUNG VORHANDEN',
+                inhalt: 'Für $wache ist noch eine offene Bestellung (${bestehend.bestellNr ?? "ohne Nr."}, '
+                    '$erledigt/${bestehend.positionen.length} erledigt) vorhanden. Durch die neue Bestellung '
+                    '(${bestellung.bestellNr ?? "ohne Nr."}) ersetzen? Der bisherige Fortschritt geht verloren.',
+              );
+              if (!weiter) {
+                fehler.add('${picked.name}: Import übersprungen (offene Bestellung vorhanden)');
+                continue;
+              }
+            }
+          }
+
           _bestellungen[wache] = bestellung;
           erfolgreich.add(wache);
         } catch (e) {
@@ -541,11 +662,17 @@ class _RootScreenState extends State<RootScreen> {
       ),
     );
     if (ok == true) {
+      final entfernteWachen = _bestellungen.keys.toList();
       setState(() {
         _bestellungen.clear();
         _ausgewaehlteWache = null;
       });
-      await _bestellungenSpeichern();
+      await _bestellungenLokalSpeichern();
+      for (final wache in entfernteWachen) {
+        try {
+          await _db.from('bestellungen').delete().eq('wache', wache);
+        } catch (_) {}
+      }
     }
   }
 
@@ -556,7 +683,10 @@ class _RootScreenState extends State<RootScreen> {
         _ausgewaehlteWache = _bestellungen.keys.isNotEmpty ? _bestellungen.keys.first : null;
       }
     });
-    await _bestellungenSpeichern();
+    await _bestellungenLokalSpeichern();
+    try {
+      await _db.from('bestellungen').delete().eq('wache', wache);
+    } catch (_) {}
   }
 
   Future<void> _toggleAbgehakt(BestellPosition pos) async {
@@ -731,6 +861,14 @@ class _RootScreenState extends State<RootScreen> {
         automaticallyImplyLeading: false,
         title: const Text('KOMMISSIONIEREN', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
         actions: [
+          IconButton(
+            icon: _isSyncingBestellungen
+                ? const SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _red))
+                : const Icon(Icons.sync),
+            tooltip: 'Von der Datenbank aktualisieren',
+            onPressed: _isSyncingBestellungen ? null : _bestellungenVonDbLaden,
+          ),
           if (_bestellungen.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.report_gmailerrorred_outlined),
