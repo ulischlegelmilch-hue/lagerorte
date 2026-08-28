@@ -452,11 +452,11 @@ class _RootScreenState extends State<RootScreen> {
 
   // ---------------- Lagerliste-Import ----------------
 
-  Future<void> _lagerPdfImportieren() async {
+  Future<void> _lagerImportieren() async {
     setState(() => _lagerFehler = null);
     final result = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf'],
+        allowedExtensions: ['pdf', 'xlsx'],
         // Default-Verhalten des Web-Plugins bricht die Auswahl automatisch ab,
         // wenn das Browserfenster kurz den Fokus verliert - passiert auf
         // iOS/Safari beim systemeigenen Dateiauswahl-Sheet regelmäßig und
@@ -465,18 +465,29 @@ class _RootScreenState extends State<RootScreen> {
       );
     if (result.isEmpty) return;
     final picked = result.first;
+    final istXlsx = picked.name.toLowerCase().endsWith('.xlsx');
 
     setState(() => _isParsingLager = true);
     try {
       final bytes = await picked.readAsBytes();
-      final text = extractPdfText(bytes);
 
-      final lagerMatch = RegExp(r'Inventurliste\s+Lager\s+(.+)').firstMatch(text);
-      final lagerName = lagerMatch?.group(1)?.trim() ?? picked.name.replaceAll('.pdf', '');
-
-      final items = parseInventurliste(text);
+      String lagerName;
+      List<ArtikelOrt> items;
+      if (istXlsx) {
+        // Die Excel-Inventurliste liefert nur Tabellenzellen, keinen
+        // Fließtext mit einem "Inventurliste Lager X"-Titel wie die PDF -
+        // der Lagername kommt daher immer aus dem Dateinamen.
+        lagerName = picked.name.replaceAll(RegExp(r'\.xlsx$', caseSensitive: false), '');
+        items = parseInventurlisteXlsx(bytes);
+      } else {
+        final text = extractPdfText(bytes);
+        final lagerMatch = RegExp(r'Inventurliste\s+Lager\s+(.+)').firstMatch(text);
+        lagerName = lagerMatch?.group(1)?.trim() ??
+            picked.name.replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
+        items = parseInventurliste(text);
+      }
       if (items.isEmpty) {
-        setState(() => _lagerFehler = 'Es konnten keine Artikel in dieser PDF erkannt werden.');
+        setState(() => _lagerFehler = 'Es konnten keine Artikel in dieser Datei erkannt werden.');
         return;
       }
 
@@ -545,7 +556,7 @@ class _RootScreenState extends State<RootScreen> {
         );
       }
     } catch (e) {
-      setState(() => _lagerFehler = 'PDF konnte nicht gelesen werden: $e');
+      setState(() => _lagerFehler = 'Datei konnte nicht gelesen werden: $e');
     } finally {
       if (mounted) setState(() => _isParsingLager = false);
     }
@@ -1691,9 +1702,9 @@ class _RootScreenState extends State<RootScreen> {
             icon: _isParsingLager
                 ? const SizedBox(width: 20, height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2, color: _red))
-                : const Icon(Icons.picture_as_pdf_outlined),
-            tooltip: 'Inventurliste (PDF) importieren',
-            onPressed: _isParsingLager ? null : _lagerPdfImportieren,
+                : const Icon(Icons.upload_file_outlined),
+            tooltip: 'Inventurliste (PDF oder Excel) importieren',
+            onPressed: _isParsingLager ? null : _lagerImportieren,
           ),
           if (_aktivesLager != null)
             IconButton(
@@ -1717,7 +1728,7 @@ class _RootScreenState extends State<RootScreen> {
                 const Icon(Icons.location_off_outlined, size: 60, color: Colors.grey),
                 const SizedBox(height: 16),
                 const Text(
-                  'Noch keine Lagerliste importiert.\nOben rechts eine Inventurliste (PDF) hochladen.',
+                  'Noch keine Lagerliste importiert.\nOben rechts eine Inventurliste (PDF oder Excel) hochladen.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.grey),
                 ),

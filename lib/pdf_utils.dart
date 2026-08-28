@@ -1,3 +1,4 @@
+import 'package:excel/excel.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 /// Extrahiert den kompletten Text aller Seiten einer PDF.
@@ -125,6 +126,46 @@ List<ArtikelOrt> parseInventurliste(String text) {
     }
   }
   flush();
+  return items;
+}
+
+/// Wie [cleanArticleName], aber ohne separates Einheit-Feld: entfernt das
+/// letzte Klammer-Suffix im Namen, falls dessen Inhalt schon für sich allein
+/// zu einer bekannten Mengeneinheit-Familie passt (z.B. "(Stück)",
+/// "(Pack.)"). Wird für die Excel-Inventurliste gebraucht, die - anders als
+/// die PDF-Variante - keine eigene Einheit-Spalte zum Abgleich mitliefert.
+String cleanArticleNameSelf(String name) {
+  final m = RegExp(r'^(.*)\(([^()]*)\)\s*$').firstMatch(name);
+  if (m == null) return name;
+  if (_familien(m.group(2)!).isNotEmpty) return m.group(1)!.trim();
+  return name;
+}
+
+/// Baut aus der Excel-"Inventurliste" (Spalten u.a. "Bezeichnung" und
+/// "Lagerort", per Kopfzeile erkannt statt fester Spaltenposition) dieselbe
+/// Name->Lagerort-Zuordnung wie [parseInventurliste] aus der PDF-Variante.
+List<ArtikelOrt> parseInventurlisteXlsx(List<int> bytes) {
+  final excel = Excel.decodeBytes(bytes);
+  if (excel.tables.isEmpty) return [];
+  final rows = excel.tables[excel.tables.keys.first]!.rows;
+  if (rows.isEmpty) return [];
+
+  String zelle(List<Data?> row, int i) => (i < row.length ? row[i]?.value?.toString() : null)?.trim() ?? '';
+
+  final header = rows.first;
+  final nameIdx = List.generate(header.length, (i) => i)
+      .firstWhere((i) => zelle(header, i).toLowerCase().contains('bezeichnung'), orElse: () => -1);
+  final ortIdx = List.generate(header.length, (i) => i)
+      .firstWhere((i) => zelle(header, i).toLowerCase().contains('lagerort'), orElse: () => -1);
+  if (nameIdx < 0 || ortIdx < 0) return [];
+
+  final items = <ArtikelOrt>[];
+  for (final row in rows.skip(1)) {
+    final name = zelle(row, nameIdx);
+    final ort = zelle(row, ortIdx);
+    if (name.isEmpty || ort.isEmpty) continue;
+    items.add(ArtikelOrt(cleanArticleNameSelf(name), ort));
+  }
   return items;
 }
 

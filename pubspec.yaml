@@ -39,6 +39,7 @@ dependencies:
   syncfusion_flutter_pdf: ^33.2.13
   shared_preferences: ^2.5.5
   supabase_flutter: ^2.17.2
+  excel: ^4.0.6
 
 dev_dependencies:
   flutter_test:
