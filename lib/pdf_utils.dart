@@ -56,11 +56,21 @@ class ArtikelOrt {
   /// damit eine manuelle Korrektur nicht wieder von den PDF-Daten
   /// überschrieben wird.
   bool lagerortManuell;
-  ArtikelOrt(this.name, this.lagerort, {this.reihenfolge = -1, this.lagerortManuell = false});
-  Map<String, dynamic> toJson() => {'n': name, 'l': lagerort, 'r': reihenfolge, 'lm': lagerortManuell};
+  /// Manuell festgelegte Position der Lagerort-GRUPPE selbst (z.B. "Palette"
+  /// vor oder nach "Regal 3"), unabhängig von der Reihenfolge der Artikel
+  /// innerhalb dieser Gruppe. -1 = keine eigene Position, dann greift die
+  /// feste Kategorie-Logik in [_lagerortSortKey]. Gilt für alle Artikel mit
+  /// demselben Lagerort gemeinsam (wird beim Setzen auf alle übertragen).
+  int lagerortGruppenReihenfolge;
+  ArtikelOrt(this.name, this.lagerort,
+      {this.reihenfolge = -1, this.lagerortManuell = false, this.lagerortGruppenReihenfolge = -1});
+  Map<String, dynamic> toJson() =>
+      {'n': name, 'l': lagerort, 'r': reihenfolge, 'lm': lagerortManuell, 'lgr': lagerortGruppenReihenfolge};
   factory ArtikelOrt.fromJson(Map<String, dynamic> m) => ArtikelOrt(
       m['n'] as String, m['l'] as String,
-      reihenfolge: m['r'] as int? ?? -1, lagerortManuell: m['lm'] as bool? ?? false);
+      reihenfolge: m['r'] as int? ?? -1,
+      lagerortManuell: m['lm'] as bool? ?? false,
+      lagerortGruppenReihenfolge: m['lgr'] as int? ?? -1);
 }
 
 /// Baut aus dem "Inventurliste"-PDF (Spalten: Artikelnummer, Lagerort,

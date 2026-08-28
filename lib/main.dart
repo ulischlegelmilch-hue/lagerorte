@@ -377,14 +377,16 @@ class _RootScreenState extends State<RootScreen> {
   Future<void> _lagerVonDbLaden() async {
     setState(() => _isSyncingLager = true);
     try {
-      final rows = await _db.from('lagerorte').select('lager, name, lagerort, reihenfolge, lagerort_manuell');
+      final rows = await _db.from('lagerorte').select(
+          'lager, name, lagerort, reihenfolge, lagerort_manuell, lagerort_gruppen_reihenfolge');
       final Map<String, List<ArtikelOrt>> geladen = {};
       for (final row in rows as List) {
         final lager = row['lager'] as String;
         geladen.putIfAbsent(lager, () => []).add(ArtikelOrt(
             row['name'] as String, row['lagerort'] as String,
             reihenfolge: row['reihenfolge'] as int? ?? -1,
-            lagerortManuell: row['lagerort_manuell'] as bool? ?? false));
+            lagerortManuell: row['lagerort_manuell'] as bool? ?? false,
+            lagerortGruppenReihenfolge: row['lagerort_gruppen_reihenfolge'] as int? ?? -1));
       }
       if (geladen.isNotEmpty || _lager.isEmpty) {
         setState(() {
@@ -478,29 +480,34 @@ class _RootScreenState extends State<RootScreen> {
         return;
       }
 
-      // Manuell gesetzte Reihenfolgen aus der bisherigen Liste übernehmen
-      // (per Name+Lagerort gematcht), damit ein erneuter Import (z.B.
-      // aktualisierte Inventurliste) die von Hand einsortierten Artikel
-      // nicht wieder auf alphabetisch zurücksetzt.
       // Manuell gesetzte Lagerorte und Reihenfolgen aus der bisherigen Liste
       // übernehmen (per Name gematcht), damit ein erneuter Import (z.B.
       // aktualisierte Inventurliste) weder von Hand umsortierte noch von
       // Hand einem anderen Lagerort zugewiesene Artikel wieder zurücksetzt.
       // Ein manueller Lagerort geht dabei vor dem aus der PDF gelesenen -
-      // die Reihenfolge nur, wenn der Lagerort dadurch gleich geblieben ist.
+      // die Artikel-Reihenfolge nur, wenn der Lagerort dadurch gleich
+      // geblieben ist. Die Gruppen-Reihenfolge der Lagerorte selbst wird
+      // separat unten per Lagerort (statt per Artikel) übernommen.
       final alt = _lager[lagerName];
       if (alt != null) {
         final altByName = <String, ArtikelOrt>{for (final a in alt) a.name: a};
+        final alteGruppenReihenfolge = <String, int>{
+          for (final a in alt)
+            if (a.lagerortGruppenReihenfolge >= 0) a.lagerort: a.lagerortGruppenReihenfolge,
+        };
         for (final item in items) {
           final vorherige = altByName[item.name];
-          if (vorherige == null) continue;
-          if (vorherige.lagerortManuell) {
-            item.lagerort = vorherige.lagerort;
-            item.lagerortManuell = true;
+          if (vorherige != null) {
+            if (vorherige.lagerortManuell) {
+              item.lagerort = vorherige.lagerort;
+              item.lagerortManuell = true;
+            }
+            if (vorherige.reihenfolge >= 0 && vorherige.lagerort == item.lagerort) {
+              item.reihenfolge = vorherige.reihenfolge;
+            }
           }
-          if (vorherige.reihenfolge >= 0 && vorherige.lagerort == item.lagerort) {
-            item.reihenfolge = vorherige.reihenfolge;
-          }
+          final g = alteGruppenReihenfolge[item.lagerort];
+          if (g != null) item.lagerortGruppenReihenfolge = g;
         }
       }
 
@@ -520,6 +527,7 @@ class _RootScreenState extends State<RootScreen> {
                   'lagerort': a.lagerort,
                   'reihenfolge': a.reihenfolge,
                   'lagerort_manuell': a.lagerortManuell,
+                  'lagerort_gruppen_reihenfolge': a.lagerortGruppenReihenfolge,
                 })
             .toList());
       } catch (e) {
@@ -589,6 +597,31 @@ class _RootScreenState extends State<RootScreen> {
     return _artikelVergleich(a, b);
   }
 
+  /// Manuell festgelegte Reihenfolge der Lagerort-GRUPPEN im aktiven
+  /// Hauptlager (z.B. "Palette" vor "Regal 3"), unabhängig von der Artikel-
+  /// Reihenfolge innerhalb einer Gruppe: Lagerort -> Position.
+  Map<String, int> get _lagerortGruppenIndex {
+    final liste = _lager[_aktivesLager] ?? [];
+    final index = <String, int>{};
+    for (final a in liste) {
+      if (a.lagerortGruppenReihenfolge >= 0) index[a.lagerort] = a.lagerortGruppenReihenfolge;
+    }
+    return index;
+  }
+
+  /// Vergleicht zwei Lagerorte für die Gruppen-Reihenfolge: eine manuell
+  /// gesetzte Position geht vor der festen Kategorie-Logik in
+  /// [_lagerortSortKey].
+  int _lagerortVergleich(String a, String b) {
+    final index = _lagerortGruppenIndex;
+    final ga = index[a];
+    final gb = index[b];
+    if (ga != null && gb != null && ga != gb) return ga.compareTo(gb);
+    if (ga != null && gb == null) return -1;
+    if (gb != null && ga == null) return 1;
+    return _lagerortSortKey(a).compareTo(_lagerortSortKey(b));
+  }
+
   List<ArtikelOrt> get _gefiltert {
     final liste = _lager[_aktivesLager] ?? [];
     final q = _searchCtrl.text.trim().toLowerCase();
@@ -597,7 +630,7 @@ class _RootScreenState extends State<RootScreen> {
         : liste.where((a) => a.name.toLowerCase().contains(q)).toList();
     if (_lagerlisteSortierung == 1) {
       gefiltert.sort((a, b) {
-        final ortVergleich = _lagerortSortKey(a.lagerort).compareTo(_lagerortSortKey(b.lagerort));
+        final ortVergleich = _lagerortVergleich(a.lagerort, b.lagerort);
         if (ortVergleich != 0) return ortVergleich;
         return _artikelOrtVergleich(a, b);
       });
@@ -713,6 +746,120 @@ class _RootScreenState extends State<RootScreen> {
             .eq('lager', lager)
             .eq('name', a.name)
             .eq('lagerort', a.lagerort);
+      }
+    } catch (_) {
+      // offline oder DB nicht erreichbar -> lokal bleibt die neue Reihenfolge
+      // gespeichert, naechster erfolgreicher Lager-Import gleicht sie ab
+    }
+  }
+
+  /// Öffnet eine Sortier-Ansicht für alle Lagerort-GRUPPEN des aktiven
+  /// Hauptlagers (z.B. "Palette" vor oder nach "Regal 3"), unabhängig von
+  /// der Reihenfolge der Artikel innerhalb einer Gruppe (siehe
+  /// [_reihenfolgeBearbeiten]).
+  Future<void> _lagerortReihenfolgeBearbeiten() async {
+    final lager = _aktivesLager;
+    if (lager == null) return;
+    final alle = _lager[lager]!;
+    final orte = alle.map((a) => a.lagerort).toSet().toList()..sort(_lagerortVergleich);
+
+    final ergebnis = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: _card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => DraggableScrollableSheet(
+          initialChildSize: 0.75,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (ctx, scrollController) => Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 4),
+              child: Row(children: [
+                const Expanded(
+                  child: Text('REIHENFOLGE DER LAGERORTE',
+                      style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0, color: Colors.white)),
+                ),
+                IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => Navigator.pop(ctx, false)),
+              ]),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text('Lagerorte per Ziehen am Griff in die gewünschte Reihenfolge bringen.',
+                  style: TextStyle(color: Colors.grey, fontSize: 12)),
+            ),
+            Expanded(
+              child: ReorderableListView.builder(
+                scrollController: scrollController,
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                itemCount: orte.length,
+                onReorder: (oldIndex, newIndex) {
+                  setSheetState(() {
+                    if (newIndex > oldIndex) newIndex -= 1;
+                    final item = orte.removeAt(oldIndex);
+                    orte.insert(newIndex, item);
+                  });
+                },
+                itemBuilder: (ctx, i) => Container(
+                  key: ValueKey(orte[i]),
+                  margin: const EdgeInsets.symmetric(vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _card,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  child: ListTile(
+                    leading: Text('${i + 1}', style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
+                    title: Text(orte[i], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                    trailing: const Icon(Icons.drag_handle, color: Colors.white38),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              child: Row(children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () {
+                      setSheetState(() => orte.sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b))));
+                    },
+                    child: const Text('STANDARD ZURÜCKSETZEN'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(backgroundColor: _red, minimumSize: const Size.fromHeight(44)),
+                    child: const Text('ÜBERNEHMEN', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+
+    if (ergebnis != true) return;
+    setState(() {
+      for (var i = 0; i < orte.length; i++) {
+        for (final a in alle) {
+          if (a.lagerort == orte[i]) a.lagerortGruppenReihenfolge = i;
+        }
+      }
+    });
+    await _lagerSpeichern();
+    try {
+      for (var i = 0; i < orte.length; i++) {
+        await _db
+            .from('lagerorte')
+            .update({'lagerort_gruppen_reihenfolge': i})
+            .eq('lager', lager)
+            .eq('lagerort', orte[i]);
       }
     } catch (_) {
       // offline oder DB nicht erreichbar -> lokal bleibt die neue Reihenfolge
@@ -1301,7 +1448,7 @@ class _RootScreenState extends State<RootScreen> {
       byOrt.putIfAbsent(a.lagerort, () => []).add(a);
     }
     final keys = byOrt.keys.toList()
-      ..sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b)));
+      ..sort(_lagerortVergleich);
     final erledigt = aggregat.where((a) => a.abgehakt).length;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1436,7 +1583,7 @@ class _RootScreenState extends State<RootScreen> {
       byOrt.putIfAbsent(ort, () => []).add(pos);
     }
     final keys = byOrt.keys.toList()
-      ..sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b)));
+      ..sort(_lagerortVergleich);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
@@ -1548,6 +1695,12 @@ class _RootScreenState extends State<RootScreen> {
             tooltip: 'Inventurliste (PDF) importieren',
             onPressed: _isParsingLager ? null : _lagerPdfImportieren,
           ),
+          if (_aktivesLager != null)
+            IconButton(
+              icon: const Icon(Icons.reorder),
+              tooltip: 'Reihenfolge der Lagerorte anpassen',
+              onPressed: _lagerortReihenfolgeBearbeiten,
+            ),
         ],
       ),
       if (_lagerFehler != null)
@@ -1691,7 +1844,7 @@ class _RootScreenState extends State<RootScreen> {
         .map((a) => a.lagerort)
         .toSet()
         .toList()
-      ..sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b)));
+      ..sort(_lagerortVergleich);
     final neuerOrtCtrl = TextEditingController();
 
     final ausgewaehlterOrt = await showModalBottomSheet<String>(
@@ -1808,7 +1961,7 @@ class _RootScreenState extends State<RootScreen> {
       byOrt.putIfAbsent(a.lagerort, () => []).add(a);
     }
     final keys = byOrt.keys.toList()
-      ..sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b)));
+      ..sort(_lagerortVergleich);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
