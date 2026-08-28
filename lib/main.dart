@@ -377,11 +377,13 @@ class _RootScreenState extends State<RootScreen> {
   Future<void> _lagerVonDbLaden() async {
     setState(() => _isSyncingLager = true);
     try {
-      final rows = await _db.from('lagerorte').select('lager, name, lagerort');
+      final rows = await _db.from('lagerorte').select('lager, name, lagerort, reihenfolge');
       final Map<String, List<ArtikelOrt>> geladen = {};
       for (final row in rows as List) {
         final lager = row['lager'] as String;
-        geladen.putIfAbsent(lager, () => []).add(ArtikelOrt(row['name'] as String, row['lagerort'] as String));
+        geladen.putIfAbsent(lager, () => []).add(ArtikelOrt(
+            row['name'] as String, row['lagerort'] as String,
+            reihenfolge: row['reihenfolge'] as int? ?? -1));
       }
       if (geladen.isNotEmpty || _lager.isEmpty) {
         setState(() {
@@ -475,6 +477,22 @@ class _RootScreenState extends State<RootScreen> {
         return;
       }
 
+      // Manuell gesetzte Reihenfolgen aus der bisherigen Liste übernehmen
+      // (per Name+Lagerort gematcht), damit ein erneuter Import (z.B.
+      // aktualisierte Inventurliste) die von Hand einsortierten Artikel
+      // nicht wieder auf alphabetisch zurücksetzt.
+      final alt = _lager[lagerName];
+      if (alt != null) {
+        final alteReihenfolge = <String, int>{
+          for (final a in alt)
+            if (a.reihenfolge >= 0) '${a.name} ${a.lagerort}': a.reihenfolge,
+        };
+        for (final item in items) {
+          final r = alteReihenfolge['${item.name} ${item.lagerort}'];
+          if (r != null) item.reihenfolge = r;
+        }
+      }
+
       setState(() {
         _lager[lagerName] = items;
         _aktivesLager = lagerName;
@@ -484,8 +502,9 @@ class _RootScreenState extends State<RootScreen> {
       String? dbFehler;
       try {
         await _db.from('lagerorte').delete().eq('lager', lagerName);
-        await _db.from('lagerorte').insert(
-            items.map((a) => {'lager': lagerName, 'name': a.name, 'lagerort': a.lagerort}).toList());
+        await _db.from('lagerorte').insert(items
+            .map((a) => {'lager': lagerName, 'name': a.name, 'lagerort': a.lagerort, 'reihenfolge': a.reihenfolge})
+            .toList());
       } catch (e) {
         dbFehler = '$e';
       }
@@ -520,6 +539,39 @@ class _RootScreenState extends State<RootScreen> {
     } catch (_) {}
   }
 
+  /// Vergleicht zwei Artikel innerhalb desselben Lagerorts: manuell gesetzte
+  /// Reihenfolgen (siehe [ArtikelOrt.reihenfolge]) gehen vor, Artikel ohne
+  /// eigene Position werden natürlich sortiert und hinten angehängt.
+  int _artikelOrtVergleich(ArtikelOrt a, ArtikelOrt b) {
+    if (a.reihenfolge >= 0 && b.reihenfolge >= 0 && a.reihenfolge != b.reihenfolge) {
+      return a.reihenfolge.compareTo(b.reihenfolge);
+    }
+    if (a.reihenfolge >= 0 && b.reihenfolge < 0) return -1;
+    if (b.reihenfolge >= 0 && a.reihenfolge < 0) return 1;
+    return _artikelVergleich(a.name, b.name);
+  }
+
+  /// Name -> Lagerort-Eintrag im aktiven Hauptlager, für den schnellen
+  /// Zugriff auf eine evtl. manuell gesetzte Reihenfolge beim Kommissionieren
+  /// (dort liegen nur Bestellpositionen mit Artikelnamen vor, kein direkter
+  /// Bezug zum ArtikelOrt-Objekt der Lagerliste).
+  Map<String, ArtikelOrt> get _lagerIndex {
+    final liste = _lager[_aktivesLager] ?? [];
+    return {for (final a in liste) a.name.trim().toLowerCase(): a};
+  }
+
+  /// Wie [_artikelOrtVergleich], aber anhand der Artikelnamen (für Listen von
+  /// Bestellpositionen statt ArtikelOrt-Objekten).
+  int _artikelSortVergleich(String a, String b) {
+    final index = _lagerIndex;
+    final ra = index[a.trim().toLowerCase()]?.reihenfolge ?? -1;
+    final rb = index[b.trim().toLowerCase()]?.reihenfolge ?? -1;
+    if (ra >= 0 && rb >= 0 && ra != rb) return ra.compareTo(rb);
+    if (ra >= 0 && rb < 0) return -1;
+    if (rb >= 0 && ra < 0) return 1;
+    return _artikelVergleich(a, b);
+  }
+
   List<ArtikelOrt> get _gefiltert {
     final liste = _lager[_aktivesLager] ?? [];
     final q = _searchCtrl.text.trim().toLowerCase();
@@ -530,12 +582,125 @@ class _RootScreenState extends State<RootScreen> {
       gefiltert.sort((a, b) {
         final ortVergleich = _lagerortSortKey(a.lagerort).compareTo(_lagerortSortKey(b.lagerort));
         if (ortVergleich != 0) return ortVergleich;
-        return _artikelVergleich(a.name, b.name);
+        return _artikelOrtVergleich(a, b);
       });
     } else {
       gefiltert.sort((a, b) => _artikelVergleich(a.name, b.name));
     }
     return gefiltert;
+  }
+
+  /// Öffnet eine Sortier-Ansicht für alle Artikel eines Lagerorts, in der die
+  /// Reihenfolge per Drag & Drop festgelegt werden kann. Wird lokal und (falls
+  /// erreichbar) in der geteilten Datenbank gespeichert, damit sie auf allen
+  /// Geräten gilt.
+  Future<void> _reihenfolgeBearbeiten(String lagerort) async {
+    final lager = _aktivesLager;
+    if (lager == null) return;
+    final alle = _lager[lager]!;
+    final gruppe = alle.where((a) => a.lagerort == lagerort).toList()
+      ..sort(_artikelOrtVergleich);
+
+    final ergebnis = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: _card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (ctx, scrollController) => Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 4),
+              child: Row(children: [
+                Expanded(
+                  child: Text('REIHENFOLGE: ${lagerort.toUpperCase()}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0, color: Colors.white)),
+                ),
+                IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => Navigator.pop(ctx, false)),
+              ]),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text('Artikel per Ziehen am Griff in die gewünschte Reihenfolge bringen.',
+                  style: TextStyle(color: Colors.grey, fontSize: 12)),
+            ),
+            Expanded(
+              child: ReorderableListView.builder(
+                scrollController: scrollController,
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                itemCount: gruppe.length,
+                onReorder: (oldIndex, newIndex) {
+                  setSheetState(() {
+                    if (newIndex > oldIndex) newIndex -= 1;
+                    final item = gruppe.removeAt(oldIndex);
+                    gruppe.insert(newIndex, item);
+                  });
+                },
+                itemBuilder: (ctx, i) => Container(
+                  key: ValueKey(gruppe[i].name),
+                  margin: const EdgeInsets.symmetric(vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _card,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  child: ListTile(
+                    leading: Text('${i + 1}', style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
+                    title: Text(gruppe[i].name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                    trailing: const Icon(Icons.drag_handle, color: Colors.white38),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              child: Row(children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () {
+                      setSheetState(() => gruppe.sort((a, b) => _artikelVergleich(a.name, b.name)));
+                    },
+                    child: const Text('ALPHABETISCH ZURÜCKSETZEN'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(backgroundColor: _red, minimumSize: const Size.fromHeight(44)),
+                    child: const Text('ÜBERNEHMEN', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+
+    if (ergebnis != true) return;
+    for (var i = 0; i < gruppe.length; i++) {
+      gruppe[i].reihenfolge = i;
+    }
+    setState(() {});
+    await _lagerSpeichern();
+    try {
+      for (final a in gruppe) {
+        await _db
+            .from('lagerorte')
+            .update({'reihenfolge': a.reihenfolge})
+            .eq('lager', lager)
+            .eq('name', a.name)
+            .eq('lagerort', a.lagerort);
+      }
+    } catch (_) {
+      // offline oder DB nicht erreichbar -> lokal bleibt die neue Reihenfolge
+      // gespeichert, naechster erfolgreicher Lager-Import gleicht sie ab
+    }
   }
 
   // ---------------- Bestellung-Import / Kommissionieren ----------------
@@ -734,6 +899,34 @@ class _RootScreenState extends State<RootScreen> {
     } catch (_) {}
   }
 
+  /// Fragt nach, bevor die Bestellung einer einzelnen Wache entfernt wird
+  /// (der bisherige Kommissionier-Fortschritt für diese Wache geht dabei
+  /// verloren) und löscht sie erst nach Bestätigung.
+  Future<void> _bestellungEntfernenBestaetigen(String wache) async {
+    final bestellung = _bestellungen[wache];
+    if (bestellung == null) return;
+    final erledigt = bestellung.positionen.where((p) => p.abgehakt || p.nichtVerfuegbar).length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('BESTELLUNG $wache ENTFERNEN?', style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: Text('$erledigt/${bestellung.positionen.length} Positionen sind bereits bearbeitet. '
+            'Diese Bestellung wird für alle Geräte entfernt.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ABBRECHEN')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('ENTFERNEN', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await _bestellungEntfernen(wache);
+  }
+
   Future<void> _toggleAbgehakt(BestellPosition pos) async {
     setState(() {
       pos.abgehakt = !pos.abgehakt;
@@ -861,7 +1054,7 @@ class _RootScreenState extends State<RootScreen> {
         byKey.putIfAbsent(key, () => _AggregatEintrag(pos.name, ort, [])).proWache.add(MapEntry(wache, pos));
       }
     }
-    final list = byKey.values.toList()..sort((a, b) => _artikelVergleich(a.name, b.name));
+    final list = byKey.values.toList()..sort((a, b) => _artikelSortVergleich(a.name, b.name));
     return list;
   }
 
@@ -1012,6 +1205,8 @@ class _RootScreenState extends State<RootScreen> {
               side: BorderSide(color: _bestellungen.containsKey(w) ? Colors.green.withValues(alpha: 0.4) : Colors.white10),
               visualDensity: VisualDensity.compact,
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              deleteIcon: _bestellungen.containsKey(w) ? const Icon(Icons.close, size: 14) : null,
+              onDeleted: _bestellungen.containsKey(w) ? () => _bestellungEntfernenBestaetigen(w) : null,
             ),
           if (fehlend == 0)
             const Chip(
@@ -1045,7 +1240,7 @@ class _RootScreenState extends State<RootScreen> {
     );
   }
 
-  Widget _buildLocationHeader(String ort) {
+  Widget _buildLocationHeader(String ort, {VoidCallback? onReorder}) {
     final unbekannt = ort == 'Lagerort unbekannt';
     return Container(
       margin: const EdgeInsets.only(top: 12, bottom: 6),
@@ -1059,10 +1254,23 @@ class _RootScreenState extends State<RootScreen> {
         Icon(unbekannt ? Icons.help_outline : Icons.location_on,
             color: unbekannt ? Colors.orange : _red, size: 16),
         const SizedBox(width: 8),
-        Text(ort.toUpperCase(),
-            style: TextStyle(
-                color: unbekannt ? Colors.orange : Colors.white,
-                fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+        Expanded(
+          child: Text(ort.toUpperCase(),
+              style: TextStyle(
+                  color: unbekannt ? Colors.orange : Colors.white,
+                  fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+        ),
+        if (onReorder != null)
+          SizedBox(
+            width: 30, height: 30,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              iconSize: 18,
+              icon: const Icon(Icons.swap_vert, color: Colors.white54),
+              tooltip: 'Reihenfolge dieses Lagerorts anpassen',
+              onPressed: onReorder,
+            ),
+          ),
       ]),
     );
   }
@@ -1205,7 +1413,7 @@ class _RootScreenState extends State<RootScreen> {
 
     final byOrt = <String, List<BestellPosition>>{};
     final sortiert = List<BestellPosition>.from(bestellung.positionen)
-      ..sort((a, b) => _artikelVergleich(a.name, b.name));
+      ..sort((a, b) => _artikelSortVergleich(a.name, b.name));
     for (final pos in sortiert) {
       final ort = _lagerortFuer(pos) ?? 'Lagerort unbekannt';
       byOrt.putIfAbsent(ort, () => []).add(pos);
@@ -1230,7 +1438,7 @@ class _RootScreenState extends State<RootScreen> {
           IconButton(
             icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
             tooltip: 'Diese Bestellung entfernen',
-            onPressed: () => _bestellungEntfernen(ausgewaehlt),
+            onPressed: () => _bestellungEntfernenBestaetigen(ausgewaehlt),
           ),
         ]),
       ),
@@ -1460,7 +1668,7 @@ class _RootScreenState extends State<RootScreen> {
       children: keys.map((ort) {
         final items = byOrt[ort]!;
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _buildLocationHeader(ort),
+          _buildLocationHeader(ort, onReorder: () => _reihenfolgeBearbeiten(ort)),
           ...items.map(_buildArtikelKarte),
         ]);
       }).toList(),

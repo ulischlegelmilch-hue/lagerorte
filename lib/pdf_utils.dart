@@ -48,10 +48,13 @@ String cleanArticleName(String name, String einheit) {
 class ArtikelOrt {
   final String name;
   final String lagerort;
-  ArtikelOrt(this.name, this.lagerort);
-  Map<String, String> toJson() => {'n': name, 'l': lagerort};
+  /// Manuell festgelegte Position innerhalb des Lagerorts (0-basiert);
+  /// -1 = keine eigene Reihenfolge gesetzt, dann wird natürlich sortiert.
+  int reihenfolge;
+  ArtikelOrt(this.name, this.lagerort, {this.reihenfolge = -1});
+  Map<String, dynamic> toJson() => {'n': name, 'l': lagerort, 'r': reihenfolge};
   factory ArtikelOrt.fromJson(Map<String, dynamic> m) =>
-      ArtikelOrt(m['n'] as String, m['l'] as String);
+      ArtikelOrt(m['n'] as String, m['l'] as String, reihenfolge: m['r'] as int? ?? -1);
 }
 
 /// Baut aus dem "Inventurliste"-PDF (Spalten: Artikelnummer, Lagerort,
