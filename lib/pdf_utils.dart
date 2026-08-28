@@ -47,14 +47,20 @@ String cleanArticleName(String name, String einheit) {
 
 class ArtikelOrt {
   final String name;
-  final String lagerort;
+  String lagerort;
   /// Manuell festgelegte Position innerhalb des Lagerorts (0-basiert);
   /// -1 = keine eigene Reihenfolge gesetzt, dann wird natürlich sortiert.
   int reihenfolge;
-  ArtikelOrt(this.name, this.lagerort, {this.reihenfolge = -1});
-  Map<String, dynamic> toJson() => {'n': name, 'l': lagerort, 'r': reihenfolge};
-  factory ArtikelOrt.fromJson(Map<String, dynamic> m) =>
-      ArtikelOrt(m['n'] as String, m['l'] as String, reihenfolge: m['r'] as int? ?? -1);
+  /// true, wenn der Lagerort per Hand zugewiesen wurde (statt aus der PDF
+  /// übernommen). Bleibt bei einem erneuten Inventurliste-Import erhalten,
+  /// damit eine manuelle Korrektur nicht wieder von den PDF-Daten
+  /// überschrieben wird.
+  bool lagerortManuell;
+  ArtikelOrt(this.name, this.lagerort, {this.reihenfolge = -1, this.lagerortManuell = false});
+  Map<String, dynamic> toJson() => {'n': name, 'l': lagerort, 'r': reihenfolge, 'lm': lagerortManuell};
+  factory ArtikelOrt.fromJson(Map<String, dynamic> m) => ArtikelOrt(
+      m['n'] as String, m['l'] as String,
+      reihenfolge: m['r'] as int? ?? -1, lagerortManuell: m['lm'] as bool? ?? false);
 }
 
 /// Baut aus dem "Inventurliste"-PDF (Spalten: Artikelnummer, Lagerort,

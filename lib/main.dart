@@ -377,13 +377,14 @@ class _RootScreenState extends State<RootScreen> {
   Future<void> _lagerVonDbLaden() async {
     setState(() => _isSyncingLager = true);
     try {
-      final rows = await _db.from('lagerorte').select('lager, name, lagerort, reihenfolge');
+      final rows = await _db.from('lagerorte').select('lager, name, lagerort, reihenfolge, lagerort_manuell');
       final Map<String, List<ArtikelOrt>> geladen = {};
       for (final row in rows as List) {
         final lager = row['lager'] as String;
         geladen.putIfAbsent(lager, () => []).add(ArtikelOrt(
             row['name'] as String, row['lagerort'] as String,
-            reihenfolge: row['reihenfolge'] as int? ?? -1));
+            reihenfolge: row['reihenfolge'] as int? ?? -1,
+            lagerortManuell: row['lagerort_manuell'] as bool? ?? false));
       }
       if (geladen.isNotEmpty || _lager.isEmpty) {
         setState(() {
@@ -481,15 +482,25 @@ class _RootScreenState extends State<RootScreen> {
       // (per Name+Lagerort gematcht), damit ein erneuter Import (z.B.
       // aktualisierte Inventurliste) die von Hand einsortierten Artikel
       // nicht wieder auf alphabetisch zurücksetzt.
+      // Manuell gesetzte Lagerorte und Reihenfolgen aus der bisherigen Liste
+      // übernehmen (per Name gematcht), damit ein erneuter Import (z.B.
+      // aktualisierte Inventurliste) weder von Hand umsortierte noch von
+      // Hand einem anderen Lagerort zugewiesene Artikel wieder zurücksetzt.
+      // Ein manueller Lagerort geht dabei vor dem aus der PDF gelesenen -
+      // die Reihenfolge nur, wenn der Lagerort dadurch gleich geblieben ist.
       final alt = _lager[lagerName];
       if (alt != null) {
-        final alteReihenfolge = <String, int>{
-          for (final a in alt)
-            if (a.reihenfolge >= 0) '${a.name} ${a.lagerort}': a.reihenfolge,
-        };
+        final altByName = <String, ArtikelOrt>{for (final a in alt) a.name: a};
         for (final item in items) {
-          final r = alteReihenfolge['${item.name} ${item.lagerort}'];
-          if (r != null) item.reihenfolge = r;
+          final vorherige = altByName[item.name];
+          if (vorherige == null) continue;
+          if (vorherige.lagerortManuell) {
+            item.lagerort = vorherige.lagerort;
+            item.lagerortManuell = true;
+          }
+          if (vorherige.reihenfolge >= 0 && vorherige.lagerort == item.lagerort) {
+            item.reihenfolge = vorherige.reihenfolge;
+          }
         }
       }
 
@@ -503,7 +514,13 @@ class _RootScreenState extends State<RootScreen> {
       try {
         await _db.from('lagerorte').delete().eq('lager', lagerName);
         await _db.from('lagerorte').insert(items
-            .map((a) => {'lager': lagerName, 'name': a.name, 'lagerort': a.lagerort, 'reihenfolge': a.reihenfolge})
+            .map((a) => {
+                  'lager': lagerName,
+                  'name': a.name,
+                  'lagerort': a.lagerort,
+                  'reihenfolge': a.reihenfolge,
+                  'lagerort_manuell': a.lagerortManuell,
+                })
             .toList());
       } catch (e) {
         dbFehler = '$e';
@@ -1639,17 +1656,147 @@ class _RootScreenState extends State<RootScreen> {
       ),
       child: ListTile(
         title: Text(item.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: _red.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: _red.withValues(alpha: 0.5)),
+        trailing: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => _lagerortAendern(item),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: _red.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _red.withValues(alpha: 0.5)),
+                ),
+                child: Text(item.lagerort, style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.edit_outlined, size: 16, color: Colors.white38),
+            ]),
           ),
-          child: Text(item.lagerort, style: const TextStyle(color: _red, fontWeight: FontWeight.bold)),
         ),
       ),
     );
+  }
+
+  /// Öffnet eine Auswahl aller im aktiven Hauptlager bekannten Lagerorte
+  /// (plus Möglichkeit, einen neuen einzugeben), um einen Artikel manuell
+  /// einem anderen Lagerort zuzuweisen. Bleibt bei künftigen Inventurliste-
+  /// Importen erhalten (siehe [ArtikelOrt.lagerortManuell]).
+  Future<void> _lagerortAendern(ArtikelOrt item) async {
+    final lager = _aktivesLager;
+    if (lager == null) return;
+    final vorhandeneOrte = (_lager[lager] ?? [])
+        .map((a) => a.lagerort)
+        .toSet()
+        .toList()
+      ..sort((a, b) => _lagerortSortKey(a).compareTo(_lagerortSortKey(b)));
+    final neuerOrtCtrl = TextEditingController();
+
+    final ausgewaehlterOrt = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (ctx, scrollController) => Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 4),
+            child: Row(children: [
+              Expanded(
+                child: Text('LAGERORT FÜR "${item.name}"'.toUpperCase(),
+                    style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0, color: Colors.white),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => Navigator.pop(ctx)),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: neuerOrtCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Neuer Lagerort …',
+                    hintStyle: const TextStyle(color: Colors.white38),
+                    filled: true,
+                    fillColor: _bg,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  ),
+                  onSubmitted: (v) {
+                    if (v.trim().isNotEmpty) Navigator.pop(ctx, v.trim());
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.check_circle, color: _red),
+                tooltip: 'Neuen Lagerort übernehmen',
+                onPressed: () {
+                  final v = neuerOrtCtrl.text.trim();
+                  if (v.isNotEmpty) Navigator.pop(ctx, v);
+                },
+              ),
+            ]),
+          ),
+          Expanded(
+            child: ListView.builder(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+              itemCount: vorhandeneOrte.length,
+              itemBuilder: (ctx, i) {
+                final ort = vorhandeneOrte[i];
+                final aktuell = ort == item.lagerort;
+                return Container(
+                  margin: const EdgeInsets.symmetric(vertical: 3),
+                  decoration: BoxDecoration(
+                    color: aktuell ? _red.withValues(alpha: 0.12) : _card,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: aktuell ? _red.withValues(alpha: 0.5) : Colors.white10),
+                  ),
+                  child: ListTile(
+                    title: Text(ort,
+                        style: TextStyle(
+                            color: aktuell ? Colors.white : Colors.white70,
+                            fontWeight: aktuell ? FontWeight.bold : FontWeight.normal)),
+                    trailing: aktuell ? const Icon(Icons.check, color: _red) : null,
+                    onTap: () => Navigator.pop(ctx, ort),
+                  ),
+                );
+              },
+            ),
+          ),
+        ]),
+      ),
+    );
+
+    if (ausgewaehlterOrt == null || ausgewaehlterOrt == item.lagerort) return;
+    final alterOrt = item.lagerort;
+    setState(() {
+      item.lagerort = ausgewaehlterOrt;
+      item.lagerortManuell = true;
+      item.reihenfolge = -1;
+    });
+    await _lagerSpeichern();
+    try {
+      await _db
+          .from('lagerorte')
+          .update({'lagerort': ausgewaehlterOrt, 'lagerort_manuell': true, 'reihenfolge': -1})
+          .eq('lager', lager)
+          .eq('name', item.name)
+          .eq('lagerort', alterOrt);
+    } catch (_) {
+      // offline oder DB nicht erreichbar -> lokal bleibt der neue Lagerort
+      // gespeichert, naechster erfolgreicher Lager-Import gleicht ihn ab
+    }
   }
 
   /// Artikel gruppiert nach Lagerort (mit Location-Header), Lagerorte in
