@@ -31687,13 +31687,8 @@ return q}catch(p){q=A.a6(p)
 if(q instanceof A.yv){s=q
 throw A.c(A.b7B("Invalid "+a+": "+s.a,s.b,J.aQO(s)))}else if(t.bE.b(q)){r=q
 throw A.c(A.c1("Invalid "+a+' "'+b+'": '+J.a7J(r),J.aQO(r),J.b19(r)))}else throw p}},
-bea(){var s,r,q
-try{s=v.G
-if(s.speechSynthesis==null)return
-r=s.speechSynthesis
-s=new s.SpeechSynthesisUtterance("Hallo ihr Flei\xdfigen!")
-s.lang="de-DE"
-r.speak(s)}catch(q){}},
+bea(){var s
+try{new v.G.Audio("audio/login-hallo.mp3").play()}catch(s){}},
 rq(a,b){a=A.ajD(0,100,a)
 b=A.ajD(0,100,b)
 return A.aMK(A.rl(a),A.rl(b))},
