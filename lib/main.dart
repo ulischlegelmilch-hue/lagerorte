@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'pdf_utils.dart';
+import 'web_speech.dart';
 
 const _red = Color(0xFFE30613);
 const _bg = Color(0xFF121212);
@@ -182,6 +183,7 @@ class _GateScreenState extends State<GateScreen> {
         _freigeschaltet = true;
         _fehler = null;
       });
+      sagHalloFleissige();
     } else {
       setState(() => _fehler = 'Falsches Passwort');
     }
