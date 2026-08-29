@@ -577,6 +577,19 @@ class _RootScreenState extends State<RootScreen> {
     } catch (_) {}
   }
 
+  /// Fragt nach, bevor eine komplette Lagerliste (potenziell hunderte
+  /// Artikel) entfernt wird - analog zu den Bestätigungen beim Entfernen
+  /// einer Bestellung.
+  Future<void> _lagerLoeschenBestaetigen(String lager) async {
+    final anzahl = _lager[lager]?.length ?? 0;
+    final ok = await _confirmDialog(
+      title: 'LAGERLISTE $lager ENTFERNEN?',
+      content: '$anzahl Artikel dieses Lagers werden für alle Geräte entfernt.',
+      confirmLabel: 'ENTFERNEN',
+    );
+    if (ok) await _lagerLoeschen(lager);
+  }
+
   /// Vergleicht zwei Artikel innerhalb desselben Lagerorts: manuell gesetzte
   /// Reihenfolgen (siehe [ArtikelOrt.reihenfolge]) gehen vor, Artikel ohne
   /// eigene Position werden natürlich sortiert und hinten angehängt.
@@ -891,28 +904,41 @@ class _RootScreenState extends State<RootScreen> {
   bool _istAbgeschlossen(Bestellung b) =>
       b.positionen.isNotEmpty && b.positionen.every((p) => p.abgehakt || p.nichtVerfuegbar);
 
-  /// Bestätigungsdialog für Konfliktfälle beim Bestellungs-Import (siehe
-  /// _bestellungPdfImportieren). Gibt true zurück, wenn trotzdem importiert
-  /// werden soll.
-  Future<bool> _importKonfliktBestaetigen({required String titel, required String inhalt}) async {
+  /// Generischer Bestätigungsdialog im einheitlichen App-Stil (abgerundete
+  /// Karte, "ABBRECHEN"-TextButton + roter Bestätigen-Button). Gibt true
+  /// zurück, wenn bestätigt wurde. Wird von allen destruktiven/verändernden
+  /// Aktionen der App verwendet, damit jede davon dieselbe, vertraute
+  /// Rückfrage bekommt.
+  Future<bool> _confirmDialog({
+    required String title,
+    required String content,
+    required String confirmLabel,
+  }) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(titel, style: const TextStyle(fontWeight: FontWeight.bold)),
-        content: Text(inhalt),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(content),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ABBRECHEN')),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(backgroundColor: _red),
-            child: const Text('TROTZDEM IMPORTIEREN', style: TextStyle(color: Colors.white)),
+            child: Text(confirmLabel, style: const TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
     return ok == true;
+  }
+
+  /// Bestätigungsdialog für Konfliktfälle beim Bestellungs-Import (siehe
+  /// _bestellungPdfImportieren). Gibt true zurück, wenn trotzdem importiert
+  /// werden soll.
+  Future<bool> _importKonfliktBestaetigen({required String titel, required String inhalt}) {
+    return _confirmDialog(title: titel, content: inhalt, confirmLabel: 'TROTZDEM IMPORTIEREN');
   }
 
   /// Erlaubt die Auswahl mehrerer Bestellungs-PDFs auf einmal (z.B. alle
@@ -1031,24 +1057,12 @@ class _RootScreenState extends State<RootScreen> {
   }
 
   Future<void> _allesLeerenBestaetigen() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('ALLE BESTELLUNGEN LEEREN?', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Text('Die importierten Bestellungen aller ${_bestellungen.length} Wache(n) werden entfernt.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ABBRECHEN')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('LEEREN', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
+    final ok = await _confirmDialog(
+      title: 'ALLE BESTELLUNGEN LEEREN?',
+      content: 'Die importierten Bestellungen aller ${_bestellungen.length} Wache(n) werden entfernt.',
+      confirmLabel: 'LEEREN',
     );
-    if (ok == true) {
+    if (ok) {
       final entfernteWachen = _bestellungen.keys.toList();
       setState(() {
         _bestellungen.clear();
@@ -1083,25 +1097,13 @@ class _RootScreenState extends State<RootScreen> {
     final bestellung = _bestellungen[wache];
     if (bestellung == null) return;
     final erledigt = bestellung.positionen.where((p) => p.abgehakt || p.nichtVerfuegbar).length;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('BESTELLUNG $wache ENTFERNEN?', style: const TextStyle(fontWeight: FontWeight.bold)),
-        content: Text('$erledigt/${bestellung.positionen.length} Positionen sind bereits bearbeitet. '
-            'Diese Bestellung wird für alle Geräte entfernt.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ABBRECHEN')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('ENTFERNEN', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
+    final ok = await _confirmDialog(
+      title: 'BESTELLUNG $wache ENTFERNEN?',
+      content: '$erledigt/${bestellung.positionen.length} Positionen sind bereits bearbeitet. '
+          'Diese Bestellung wird für alle Geräte entfernt.',
+      confirmLabel: 'ENTFERNEN',
     );
-    if (ok == true) await _bestellungEntfernen(wache);
+    if (ok) await _bestellungEntfernen(wache);
   }
 
   Future<void> _toggleAbgehakt(BestellPosition pos) async {
@@ -1276,26 +1278,33 @@ class _RootScreenState extends State<RootScreen> {
         automaticallyImplyLeading: false,
         title: const Text('KOMMISSIONIEREN', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
         actions: [
-          IconButton(
+          PopupMenuButton<void>(
+            tooltip: 'Mehr',
             icon: _isSyncingBestellungen
                 ? const SizedBox(width: 20, height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2, color: _red))
-                : const Icon(Icons.sync),
-            tooltip: 'Von der Datenbank aktualisieren',
-            onPressed: _isSyncingBestellungen ? null : _bestellungenVonDbLaden,
+                : const Icon(Icons.more_vert),
+            itemBuilder: (context) {
+              final nichtVerfuegbarAnzahl =
+                  _nichtVerfuegbarNachWache().values.fold(0, (s, l) => s + l.length);
+              return [
+                PopupMenuItem(
+                  onTap: _isSyncingBestellungen ? null : _bestellungenVonDbLaden,
+                  child: const Text('Von der Datenbank aktualisieren'),
+                ),
+                if (_bestellungen.isNotEmpty)
+                  PopupMenuItem(
+                    onTap: _nichtVerfuegbarAnzeigen,
+                    child: Text('Nicht bereitgestellte Artikel anzeigen ($nichtVerfuegbarAnzahl)'),
+                  ),
+                if (_bestellungen.isNotEmpty)
+                  PopupMenuItem(
+                    onTap: _allesLeerenBestaetigen,
+                    child: const Text('Alle Bestellungen leeren'),
+                  ),
+              ];
+            },
           ),
-          if (_bestellungen.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.report_gmailerrorred_outlined),
-              tooltip: 'Nicht bereitgestellte Artikel anzeigen',
-              onPressed: _nichtVerfuegbarAnzeigen,
-            ),
-          if (_bestellungen.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.delete_sweep_outlined),
-              tooltip: 'Alle Bestellungen leeren',
-              onPressed: _allesLeerenBestaetigen,
-            ),
           IconButton(
             icon: _isParsingBestellung
                 ? const SizedBox(width: 20, height: 20,
@@ -1561,16 +1570,19 @@ class _RootScreenState extends State<RootScreen> {
               ]),
             ),
             const SizedBox(height: 8),
-            GestureDetector(
-              onTap: () => _toggleGruppe(a.proWache.map((e) => e.value).toList()),
-              child: Container(
-                width: 36, height: 36,
-                decoration: BoxDecoration(
-                  color: (a.abgehakt ? Colors.green : Colors.white).withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: a.abgehakt ? Colors.green : Colors.white24, width: 1.5),
+            Tooltip(
+              message: 'Für alle Wachen als erledigt markieren',
+              child: GestureDetector(
+                onTap: () => _toggleGruppe(a.proWache.map((e) => e.value).toList()),
+                child: Container(
+                  width: 36, height: 36,
+                  decoration: BoxDecoration(
+                    color: (a.abgehakt ? Colors.green : Colors.white).withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: a.abgehakt ? Colors.green : Colors.white24, width: 1.5),
+                  ),
+                  child: Icon(Icons.check, color: a.abgehakt ? Colors.green : Colors.white38, size: 18),
                 ),
-                child: Icon(Icons.check, color: a.abgehakt ? Colors.green : Colors.white38, size: 18),
               ),
             ),
           ]),
@@ -1692,13 +1704,23 @@ class _RootScreenState extends State<RootScreen> {
         automaticallyImplyLeading: false,
         title: const Text('LAGERLISTE', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
         actions: [
-          IconButton(
+          PopupMenuButton<void>(
+            tooltip: 'Mehr',
             icon: _isSyncingLager
                 ? const SizedBox(width: 20, height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2, color: _red))
-                : const Icon(Icons.sync),
-            tooltip: 'Von der Datenbank aktualisieren',
-            onPressed: _isSyncingLager ? null : _lagerVonDbLaden,
+                : const Icon(Icons.more_vert),
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                onTap: _isSyncingLager ? null : _lagerVonDbLaden,
+                child: const Text('Von der Datenbank aktualisieren'),
+              ),
+              if (_aktivesLager != null)
+                PopupMenuItem(
+                  onTap: _lagerortReihenfolgeBearbeiten,
+                  child: const Text('Lagerort-Reihenfolge anpassen'),
+                ),
+            ],
           ),
           IconButton(
             icon: _isParsingLager
@@ -1708,12 +1730,6 @@ class _RootScreenState extends State<RootScreen> {
             tooltip: 'Inventurliste (PDF oder Excel) importieren',
             onPressed: _isParsingLager ? null : _lagerImportieren,
           ),
-          if (_aktivesLager != null)
-            IconButton(
-              icon: const Icon(Icons.reorder),
-              tooltip: 'Reihenfolge der Lagerorte anpassen',
-              onPressed: _lagerortReihenfolgeBearbeiten,
-            ),
         ],
       ),
       if (_lagerFehler != null)
@@ -1757,7 +1773,7 @@ class _RootScreenState extends State<RootScreen> {
                 IconButton(
                   icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
                   tooltip: 'Diese Lagerliste entfernen',
-                  onPressed: () => _lagerLoeschen(_aktivesLager!),
+                  onPressed: () => _lagerLoeschenBestaetigen(_aktivesLager!),
                 ),
             ]),
           ),
