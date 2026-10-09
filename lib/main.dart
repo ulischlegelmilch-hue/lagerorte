@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'pdf_utils.dart';
 import 'login_greeting.dart';
+import 'update_check.dart';
 
 const _red = Color(0xFFE30613);
 const _bg = Color(0xFF121212);
@@ -157,6 +158,7 @@ class LagerorteApp extends StatelessWidget {
         scaffoldBackgroundColor: _bg,
         colorScheme: const ColorScheme.dark(primary: _red, surface: _card),
       ),
+      builder: (context, child) => UpdateBanner(child: child ?? const SizedBox.shrink()),
       home: const GateScreen(),
     );
   }
