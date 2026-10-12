@@ -1215,18 +1215,6 @@ class _RootScreenState extends State<RootScreen> {
     await _bestellungenSpeichern();
   }
 
-  /// Alle Positionen aller offenen Bestellungen, die als "nicht verfügbar"
-  /// markiert wurden, gruppiert nach Wache.
-  Map<String, List<BestellPosition>> _nichtVerfuegbarNachWache() {
-    final result = <String, List<BestellPosition>>{};
-    for (final entry in _bestellungen.entries) {
-      final betroffen = entry.value.positionen.where((p) => p.nichtVerfuegbar).toList()
-        ..sort((a, b) => _artikelVergleich(a.name, b.name));
-      if (betroffen.isNotEmpty) result[entry.key] = betroffen;
-    }
-    return result;
-  }
-
   /// Vollbild-Übersicht je Wache zum Abfotografieren (Lagertablet hat kaum
   /// Konnektivität, Weitergabe per Foto in die WhatsApp-Gruppe): oben, was die
   /// Wache selbst besorgen muss (nicht abgehakt, nicht als nicht lieferbar
@@ -1242,80 +1230,6 @@ class _RootScreenState extends State<RootScreen> {
         vergleich: _artikelVergleich,
       ),
     ));
-  }
-
-  void _nichtVerfuegbarAnzeigen() {
-    final byWache = _nichtVerfuegbarNachWache();
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: _card,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.3,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (ctx, scrollController) => Column(children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
-            child: Row(children: [
-              const Icon(Icons.report_gmailerrorred_outlined, color: Colors.orange, size: 20),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text('NICHT BEREITGESTELLTE ARTIKEL',
-                    style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0, color: Colors.white)),
-              ),
-              IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => Navigator.pop(ctx)),
-            ]),
-          ),
-          Expanded(
-            child: byWache.isEmpty
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('Bisher wurde nichts als nicht verfügbar markiert.',
-                          textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
-                    ),
-                  )
-                : ListView(
-                    controller: scrollController,
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                    children: byWache.entries.map((entry) {
-                      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12, bottom: 6),
-                          child: Text('RW ${entry.key}',
-                              style: const TextStyle(color: _red, fontWeight: FontWeight.bold, letterSpacing: 0.6)),
-                        ),
-                        ...entry.value.map((pos) => Container(
-                              margin: const EdgeInsets.symmetric(vertical: 3),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              decoration: BoxDecoration(
-                                color: Colors.orange.withValues(alpha: 0.08),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
-                              ),
-                              child: Row(children: [
-                                Expanded(
-                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                    Text(pos.name,
-                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                                    Text(_lagerortFuer(pos) ?? 'Lagerort unbekannt',
-                                        style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                                  ]),
-                                ),
-                                Text('${pos.menge} ${pos.einheit}',
-                                    style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
-                              ]),
-                            )),
-                      ]);
-                    }).toList(),
-                  ),
-          ),
-        ]),
-      ),
-    );
   }
 
   List<_AggregatEintrag> _buildAggregat() {
@@ -1380,8 +1294,6 @@ class _RootScreenState extends State<RootScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2, color: _red))
                 : const Icon(Icons.more_vert),
             itemBuilder: (context) {
-              final nichtVerfuegbarAnzahl =
-                  _nichtVerfuegbarNachWache().values.fold(0, (s, l) => s + l.length);
               return [
                 PopupMenuItem(
                   onTap: _isSyncingBestellungen ? null : _bestellungenVonDbLaden,
@@ -1391,11 +1303,6 @@ class _RootScreenState extends State<RootScreen> {
                   PopupMenuItem(
                     onTap: _wachenUebersichtAnzeigen,
                     child: const Text('Übersicht je Wache (zum Abfotografieren)'),
-                  ),
-                if (_bestellungen.isNotEmpty)
-                  PopupMenuItem(
-                    onTap: _nichtVerfuegbarAnzeigen,
-                    child: Text('Nicht bereitgestellte Artikel anzeigen ($nichtVerfuegbarAnzahl)'),
                   ),
                 if (_bestellungen.isNotEmpty)
                   PopupMenuItem(
