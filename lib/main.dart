@@ -1111,6 +1111,7 @@ class _RootScreenState extends State<RootScreen> {
   Future<void> _toggleAbgehakt(BestellPosition pos) async {
     setState(() {
       pos.abgehakt = !pos.abgehakt;
+      pos.gepackt = null;
       if (pos.abgehakt) pos.nichtVerfuegbar = false;
     });
     await _bestellungenSpeichern();
@@ -1123,6 +1124,7 @@ class _RootScreenState extends State<RootScreen> {
     setState(() {
       for (final p in gruppe) {
         p.abgehakt = neuerStatus;
+        p.gepackt = null;
         if (neuerStatus) p.nichtVerfuegbar = false;
       }
     });
@@ -1134,7 +1136,81 @@ class _RootScreenState extends State<RootScreen> {
   Future<void> _toggleNichtVerfuegbar(BestellPosition pos) async {
     setState(() {
       pos.nichtVerfuegbar = !pos.nichtVerfuegbar;
-      if (pos.nichtVerfuegbar) pos.abgehakt = false;
+      if (pos.nichtVerfuegbar) {
+        pos.abgehakt = false;
+        pos.gepackt = null;
+      }
+    });
+    await _bestellungenSpeichern();
+  }
+
+  /// Fragt per Stepper, wie viel von der bestellten Menge tatsächlich gepackt
+  /// wurde. Voll = normal abgehakt, weniger = abgehakt mit Teilmenge (der Rest
+  /// landet in der Wachen-Übersicht unter "selbst besorgen"), 0 = zurückgesetzt.
+  Future<void> _teilmengeSetzen(BestellPosition pos, String wache) async {
+    var wert = pos.abgehakt ? (pos.gepackt ?? pos.menge) : pos.menge;
+    final ergebnis = await showDialog<int>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: _card,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('RW $wache: ${pos.name}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('Bestellt: ${pos.menge} ${pos.einheit}', style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 12),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              IconButton.filledTonal(
+                iconSize: 32,
+                onPressed: wert > 0 ? () => setD(() => wert--) : null,
+                icon: const Icon(Icons.remove),
+              ),
+              SizedBox(
+                width: 90,
+                child: Text('$wert', textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 34, fontWeight: FontWeight.bold, color: Colors.white)),
+              ),
+              IconButton.filledTonal(
+                iconSize: 32,
+                onPressed: wert < pos.menge ? () => setD(() => wert++) : null,
+                icon: const Icon(Icons.add),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              wert >= pos.menge
+                  ? 'Alles gepackt'
+                  : wert == 0
+                      ? 'Nichts gepackt (Markierung zurücksetzen)'
+                      : 'Rest: ${pos.menge - wert} ${pos.einheit} muss die Wache selbst besorgen',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: wert > 0 && wert < pos.menge ? Colors.lightBlueAccent : Colors.grey),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ABBRECHEN')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, wert),
+              style: ElevatedButton.styleFrom(backgroundColor: _red),
+              child: const Text('ÜBERNEHMEN', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ergebnis == null) return;
+    // Während der Dialog offen war, kann ein Sync die Bestellungen ersetzt
+    // haben -> Position in der aktuellen Bestellung neu auflösen.
+    final p = _bestellungen[wache]?.positionen.where((x) => x.name == pos.name).firstOrNull ?? pos;
+    setState(() {
+      p.nichtVerfuegbar = false;
+      if (ergebnis <= 0) {
+        p.abgehakt = false;
+        p.gepackt = null;
+      } else {
+        p.abgehakt = true;
+        p.gepackt = ergebnis >= p.menge ? null : ergebnis;
+      }
     });
     await _bestellungenSpeichern();
   }
@@ -1546,9 +1622,14 @@ class _RootScreenState extends State<RootScreen> {
               ...a.proWache.map((e) => Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                      Text('${e.value.menge} ${e.value.einheit}',
+                      Text(
+                          e.value.gepackt != null
+                              ? '${e.value.gepackt} von ${e.value.menge} ${e.value.einheit}'
+                              : '${e.value.menge} ${e.value.einheit}',
                           style: TextStyle(
-                              color: e.value.nichtVerfuegbar ? Colors.orange : Colors.white60,
+                              color: e.value.nichtVerfuegbar
+                                  ? Colors.orange
+                                  : (e.value.gepackt != null ? Colors.lightBlueAccent : Colors.white60),
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
                               decoration: e.value.nichtVerfuegbar ? TextDecoration.lineThrough : null)),
@@ -1558,6 +1639,17 @@ class _RootScreenState extends State<RootScreen> {
                             style: TextStyle(
                                 color: e.value.nichtVerfuegbar ? Colors.orange : Colors.grey, fontSize: 13),
                             overflow: TextOverflow.ellipsis),
+                      ),
+                      SizedBox(
+                        width: 26, height: 26,
+                        child: IconButton(
+                          padding: EdgeInsets.zero,
+                          iconSize: 15,
+                          icon: Icon(Icons.exposure,
+                              color: e.value.gepackt != null ? Colors.lightBlueAccent : Colors.white24),
+                          tooltip: 'Für RW ${e.key} nur Teilmenge packen',
+                          onPressed: () => _teilmengeSetzen(e.value, e.key),
+                        ),
                       ),
                       SizedBox(
                         width: 26, height: 26,
@@ -1699,16 +1791,30 @@ class _RootScreenState extends State<RootScreen> {
                       subtitle: Text(
                           pos.nichtVerfuegbar
                               ? '${pos.menge} ${pos.einheit} · nicht verfügbar'
-                              : '${pos.menge} ${pos.einheit}',
-                          style: TextStyle(color: pos.nichtVerfuegbar ? Colors.orange : Colors.grey, fontSize: 12)),
-                      secondary: IconButton(
-                        icon: Icon(
-                          pos.nichtVerfuegbar ? Icons.report : Icons.report_gmailerrorred_outlined,
-                          color: pos.nichtVerfuegbar ? Colors.orange : Colors.white24,
+                              : (pos.gepackt != null
+                                  ? '${pos.gepackt} von ${pos.menge} ${pos.einheit} gepackt · Rest selbst besorgen'
+                                  : '${pos.menge} ${pos.einheit}'),
+                          style: TextStyle(
+                              color: pos.nichtVerfuegbar
+                                  ? Colors.orange
+                                  : (pos.gepackt != null ? Colors.lightBlueAccent : Colors.grey),
+                              fontSize: 12)),
+                      secondary: Row(mainAxisSize: MainAxisSize.min, children: [
+                        IconButton(
+                          icon: Icon(Icons.exposure,
+                              color: pos.gepackt != null ? Colors.lightBlueAccent : Colors.white24),
+                          tooltip: 'Nur Teilmenge packen',
+                          onPressed: () => _teilmengeSetzen(pos, ausgewaehlt),
                         ),
-                        tooltip: 'Als nicht verfügbar markieren',
-                        onPressed: () => _toggleNichtVerfuegbar(pos),
-                      ),
+                        IconButton(
+                          icon: Icon(
+                            pos.nichtVerfuegbar ? Icons.report : Icons.report_gmailerrorred_outlined,
+                            color: pos.nichtVerfuegbar ? Colors.orange : Colors.white24,
+                          ),
+                          tooltip: 'Als nicht verfügbar markieren',
+                          onPressed: () => _toggleNichtVerfuegbar(pos),
+                        ),
+                      ]),
                     ),
                   )),
             ]);
@@ -2097,7 +2203,9 @@ class _WachenUebersichtPageState extends State<_WachenUebersichtPage> {
     final positionen = b?.positionen ?? const <BestellPosition>[];
     List<BestellPosition> sortiert(bool Function(BestellPosition) f) =>
         positionen.where(f).toList()..sort((a, c) => widget.vergleich(a.name, c.name));
-    final selbst = sortiert((p) => !p.abgehakt && !p.nichtVerfuegbar);
+    final selbst = sortiert((p) => p.fehlmenge > 0)
+        .map((p) => BestellPosition(p.name, p.fehlmenge, p.einheit))
+        .toList();
     final nichtLieferbar = sortiert((p) => p.nichtVerfuegbar);
     final datum = _datum(b?.erstelltAm);
     return Scaffold(

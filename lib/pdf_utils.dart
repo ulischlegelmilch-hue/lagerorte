@@ -175,11 +175,21 @@ class BestellPosition {
   final String einheit;
   bool abgehakt;
   bool nichtVerfuegbar;
-  BestellPosition(this.name, this.menge, this.einheit, {this.abgehakt = false, this.nichtVerfuegbar = false});
-  Map<String, dynamic> toJson() => {'n': name, 'm': menge, 'e': einheit, 'a': abgehakt, 'nv': nichtVerfuegbar};
+
+  /// Teilmenge: nur gesetzt, wenn abgehakt, aber weniger als bestellt gepackt
+  /// wurde (null = komplett gepackt). Der Rest muss die Wache selbst besorgen.
+  int? gepackt;
+  BestellPosition(this.name, this.menge, this.einheit,
+      {this.abgehakt = false, this.nichtVerfuegbar = false, this.gepackt});
+
+  /// Wie viel die Wache selbst besorgen muss (nicht lieferbare Artikel zählen nicht dazu).
+  int get fehlmenge => nichtVerfuegbar ? 0 : (abgehakt ? menge - (gepackt ?? menge) : menge);
+  Map<String, dynamic> toJson() =>
+      {'n': name, 'm': menge, 'e': einheit, 'a': abgehakt, 'nv': nichtVerfuegbar, if (gepackt != null) 'g': gepackt};
   factory BestellPosition.fromJson(Map<String, dynamic> j) => BestellPosition(
       j['n'] as String, j['m'] as int, j['e'] as String,
-      abgehakt: j['a'] as bool? ?? false, nichtVerfuegbar: j['nv'] as bool? ?? false);
+      abgehakt: j['a'] as bool? ?? false, nichtVerfuegbar: j['nv'] as bool? ?? false,
+      gepackt: j['g'] as int?);
 }
 
 class Bestellung {
