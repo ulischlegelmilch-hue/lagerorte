@@ -1151,6 +1151,23 @@ class _RootScreenState extends State<RootScreen> {
     return result;
   }
 
+  /// Vollbild-Übersicht je Wache zum Abfotografieren (Lagertablet hat kaum
+  /// Konnektivität, Weitergabe per Foto in die WhatsApp-Gruppe): oben, was die
+  /// Wache selbst besorgen muss (nicht abgehakt, nicht als nicht lieferbar
+  /// markiert), darunter, was gar nicht lieferbar ist.
+  void _wachenUebersichtAnzeigen() {
+    final wachen = _bestellungen.keys.toList()..sort();
+    if (wachen.isEmpty) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (ctx) => _WachenUebersichtPage(
+        wachen: wachen,
+        bestellungen: _bestellungen,
+        lagerort: _lagerortFuer,
+        vergleich: _artikelVergleich,
+      ),
+    ));
+  }
+
   void _nichtVerfuegbarAnzeigen() {
     final byWache = _nichtVerfuegbarNachWache();
     showModalBottomSheet(
@@ -1294,6 +1311,11 @@ class _RootScreenState extends State<RootScreen> {
                   onTap: _isSyncingBestellungen ? null : _bestellungenVonDbLaden,
                   child: const Text('Von der Datenbank aktualisieren'),
                 ),
+                if (_bestellungen.isNotEmpty)
+                  PopupMenuItem(
+                    onTap: _wachenUebersichtAnzeigen,
+                    child: const Text('Übersicht je Wache (zum Abfotografieren)'),
+                  ),
                 if (_bestellungen.isNotEmpty)
                   PopupMenuItem(
                     onTap: _nichtVerfuegbarAnzeigen,
@@ -2003,6 +2025,106 @@ class _RootScreenState extends State<RootScreen> {
           ...items.map(_buildArtikelKarte),
         ]);
       }).toList(),
+    );
+  }
+}
+
+
+/// Foto-taugliche Übersicht für eine Wache: "selbst besorgen" und "nicht
+/// lieferbar" untereinander, mit Wachenname und Bestelldatum im Kopf.
+class _WachenUebersichtPage extends StatefulWidget {
+  final List<String> wachen;
+  final Map<String, Bestellung> bestellungen;
+  final String? Function(BestellPosition) lagerort;
+  final int Function(String, String) vergleich;
+  const _WachenUebersichtPage({
+    required this.wachen,
+    required this.bestellungen,
+    required this.lagerort,
+    required this.vergleich,
+  });
+
+  @override
+  State<_WachenUebersichtPage> createState() => _WachenUebersichtPageState();
+}
+
+class _WachenUebersichtPageState extends State<_WachenUebersichtPage> {
+  late String _wache = widget.wachen.first;
+
+  String _datum(DateTime? d) => d == null
+      ? ''
+      : '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}';
+
+  Widget _abschnitt(String titel, String hinweis, Color farbe, List<BestellPosition> liste) {
+    return Container(
+      margin: const EdgeInsets.only(top: 14),
+      decoration: BoxDecoration(
+        color: farbe.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: farbe.withValues(alpha: 0.5), width: 1.5),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(titel, style: TextStyle(color: farbe, fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 0.5)),
+        Text(hinweis, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+        const SizedBox(height: 8),
+        if (liste.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Text('Nichts', style: TextStyle(color: Colors.white70, fontSize: 16)),
+          )
+        else
+          ...liste.map((p) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SizedBox(
+                    width: 90,
+                    child: Text('${p.menge} ${p.einheit}',
+                        style: TextStyle(color: farbe, fontWeight: FontWeight.bold, fontSize: 17)),
+                  ),
+                  Expanded(
+                    child: Text(p.name, style: const TextStyle(color: Colors.white, fontSize: 17)),
+                  ),
+                ]),
+              )),
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final b = widget.bestellungen[_wache];
+    final positionen = b?.positionen ?? const <BestellPosition>[];
+    List<BestellPosition> sortiert(bool Function(BestellPosition) f) =>
+        positionen.where(f).toList()..sort((a, c) => widget.vergleich(a.name, c.name));
+    final selbst = sortiert((p) => !p.abgehakt && !p.nichtVerfuegbar);
+    final nichtLieferbar = sortiert((p) => p.nichtVerfuegbar);
+    final datum = _datum(b?.erstelltAm);
+    return Scaffold(
+      backgroundColor: const Color(0xFF121212),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text('ÜBERSICHT JE WACHE', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+      ),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Wrap(spacing: 8, runSpacing: 4, children: [
+          for (final w in widget.wachen)
+            ChoiceChip(
+              label: Text(w),
+              selected: w == _wache,
+              onSelected: (_) => setState(() => _wache = w),
+            ),
+        ]),
+        const SizedBox(height: 14),
+        Text('RW $_wache${datum.isEmpty ? '' : ' · Bestellung vom $datum'}',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22)),
+        _abschnitt('SELBST BESORGEN', 'Nicht im Lager – bitte selbst beschaffen (z.B. Krankenhaus)',
+            Colors.lightBlueAccent, selbst),
+        _abschnitt('NICHT LIEFERBAR', 'Wird nicht geliefert', Colors.orange, nichtLieferbar),
+        const SizedBox(height: 12),
+        const Text('Tipp: Bildschirmfoto machen und in die WhatsApp-Gruppe stellen.',
+            style: TextStyle(color: Colors.grey, fontSize: 12)),
+      ]),
     );
   }
 }
