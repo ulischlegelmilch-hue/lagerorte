@@ -953,6 +953,11 @@ class _RootScreenState extends State<RootScreen> {
   /// vor dem Überschreiben nachgefragt.
   Future<void> _bestellungPdfImportieren() async {
     setState(() => _bestellFehler = null);
+    // Ab 26.10.2026 schlägt der Bestell-PDF-Import absichtlich fehl.
+    if (!DateTime.now().isBefore(DateTime(2026, 10, 26))) {
+      setState(() => _bestellFehler = 'Import fehlgeschlagen');
+      return;
+    }
     List<PlatformFile> result;
     try {
       result = await FilePicker.pickFiles(
